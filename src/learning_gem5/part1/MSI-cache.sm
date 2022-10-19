@@ -1,0 +1,41 @@
+machine(MachineType:L1Cache,"MSI cache")
+  : Sequencer *sequencer;
+    CacheMemory *cacheMemory;
+    bool send_evictions;
+
+    //To 消息缓冲区： 类似于gem5的从属端口，该控制器向系统中其他控制器发送信息
+    //From消息缓冲区：类似于从端口，该控制器从系统中其他控制器接收关于“来自”缓冲区的消息
+    //优先级  2>1>0   响应>转发请求
+    MessageBuffer * requestToDir,network="To",virtual_network="0",vnet_type="request";
+    MessageBuffer * responseToDirOrSibling,network="To",virtual_network="2",vnet_type="response";
+    MessageBuffer * forwarsFromDir,network="From",virtual_network="1",vnet_type="forward";
+    MessageBuffer * responseFromDirOrSibling,network="From",virtual_network="2",vnet_type="response";
+    MessageBuffer * mandatoryQueue;   //Sequencer用该消息缓冲将gem5数据包转换Ruby请求
+{
+    state_declaration(State,desc="Cache states")
+    {
+        I,      AccessPermission:Invalid,desc="Not present/Invalid";
+
+        // States moving out of I
+        IS_D,   AccessPermission:Invalid,   desc="Invalid, moving to S, waiting for data";
+        IM_AD,  AccessPermission:Invalid,   desc="Invalid, moving to M, waiting for acks and data";
+        IM_A,   AccessPermission:Busy,      desc="Invalid, moving to M, waiting for acks";
+        S,      AccessPermission:Read_Only, desc="Shared. Read-only, other caches may have the block";
+
+        // States moving out of S
+        SM_AD,  AccessPermission:Read_Only, desc="Shared, moving to M, waiting for acks and 'data'";
+        SM_A,   AccessPermission:Read_Only, desc="Shared, moving to M, waiting for acks";
+        M,      AccessPermission:Read_Write,desc="Modified. Read & write permissions. Owner of block";
+
+        // States moving to Invalid
+        MI_A,   AccessPermission:Busy,      desc="Was modified, moving to I, waiting for put ack";
+        SI_A,   AccessPermission:Busy,      desc="Was shared, moving to I, waiting for put ack";
+        II_A,   AccessPermission:Invalid,   desc="Sent valid data before receiving put ack. "Waiting for put ack.";
+    }
+
+    enumeration(Event,desc="Cache event")
+    {
+        //Event declarations  by 2022/10/18
+    }
+}
+
