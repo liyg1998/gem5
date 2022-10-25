@@ -456,6 +456,127 @@ machine(MachineType:L1Cache,"MSI cache")
         stall;
     }
 
+    transition(IS_D, {DataDirNoAcks, DataOwner}, S) {
+        writeDataToCache;
+        deallocateTBE;
+        externalLoadHit;
+        popResponseQueue;
+    }
+    
+    transition({IM_AD, IM_A}, {Load, Store, Replacement, FwdGetS, FwdGetM}) {
+        stall;
+    }
+    
+    transition({IM_AD, SM_AD}, {DataDirNoAcks, DataOwner}, M) {
+        writeDataToCache;
+        deallocateTBE;
+        externalStoreHit;
+        popResponseQueue;
+    }
+    
+    transition(IM_AD, DataDirAcks, IM_A) {
+        writeDataToCache;
+        storeAcks;
+        popResponseQueue;
+    }
+    
+    transition({IM_AD, IM_A, SM_AD, SM_A}, InvAck) {
+        decrAcks;
+        popResponseQueue;
+    }
+    
+    transition({IM_A, SM_A}, LastInvAck, M) {
+        deallocateTBE;
+        externalStoreHit;
+        popResponseQueue;
+    }
+    
+    transition({S, SM_AD, SM_A, M}, Load) {
+        loadHit;
+        popMandatoryQueue;
+    }
+    
+    transition(S, Store, SM_AD) {
+        allocateTBE;
+        sendGetM;
+        popMandatoryQueue;
+    }
+    
+    transition(S, Replacement, SI_A) {
+        sendPutS;
+        forwardEviction;
+    }
+    
+    transition(S, Inv, I) {
+        sendInvAcktoReq;
+        deallocateCacheBlock;
+        forwardEviction;
+        popForwardQueue;
+    }
+    
+    transition({SM_AD, SM_A}, {Store, Replacement, FwdGetS, FwdGetM}) {
+        stall;
+    }
+    
+    transition(SM_AD, Inv, IM_AD) {
+        sendInvAcktoReq;
+        forwardEviction;
+        popForwardQueue;
+    }
+    
+    transition(SM_AD, DataDirAcks, SM_A) {
+        writeDataToCache;
+        storeAcks;
+        popResponseQueue;
+    }
+    
+    transition(M, Store) {
+        storeHit;
+        popMandatoryQueue;
+    }
+    
+    transition(M, Replacement, MI_A) {
+        sendPutM;
+        forwardEviction;
+    }
+    
+    transition(M, FwdGetS, S) {
+        sendCacheDataToReq;
+        sendCacheDataToDir;
+        popForwardQueue;
+    }
+    
+    transition(M, FwdGetM, I) {
+        sendCacheDataToReq;
+        deallocateCacheBlock;
+        popForwardQueue;
+    }
+    
+    transition({MI_A, SI_A, II_A}, {Load, Store, Replacement}) {
+        stall;
+    }
+    
+    transition(MI_A, FwdGetS, SI_A) {
+        sendCacheDataToReq;
+        sendCacheDataToDir;
+        popForwardQueue;
+    }
+    
+    transition(MI_A, FwdGetM, II_A) {
+        sendCacheDataToReq;
+        popForwardQueue;
+    }
+    
+    transition({MI_A, SI_A, II_A}, PutAck, I) {
+        deallocateCacheBlock;
+        popForwardQueue;
+    }
+    
+    transition(SI_A, Inv, II_A) {
+        sendInvAcktoReq;
+        popForwardQueue;
+    }
+
 
 
 
