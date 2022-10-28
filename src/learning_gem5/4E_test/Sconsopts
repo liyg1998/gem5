@@ -1,0 +1,3 @@
+Import('*')
+main.Append(ALL_PROTOCOLS=['4E'])      #注册协议名称
+main.Append(PROTOCOL_DIRS=[Dir('.')])   #传递给SCons编译文件

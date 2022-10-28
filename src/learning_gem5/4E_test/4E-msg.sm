@@ -1,0 +1,85 @@
+//消息类型枚举
+enumeration(CoherenceClass, desc="Types of messages") {
+    //一次请求：指令流请求：
+    ReadBlkI,           desc="取指令请求（可Cache存储器空间取值令且不引起数据Cache淘汰）";
+    ReadBlKIDVic,       desc="带脏淘汰的取值令请求";
+    FeachBlKI,          desc="不进SCache的取值令请求（指令流访问不可Cache存储器空间，或可Cache）";
+
+    // 一次请求：数据流不命中Cache产生的请求
+    ReadBlk,           desc="读产生的取数请求（可Cache存储器空间Load类指令不命中Cache）";
+    ReadBlKDVic,       desc="读产生的带脏淘汰取数请求";
+    ReadBlkMod,         desc="写产生的取数请求（可Cache存储器空间Store类指令不命中Cache）";
+    ReadBlKModDvic,     desc="写产生的带脏淘汰的取数请求";
+
+    //一次请求：数据流命中Cache产生的请求
+    ShareToDirty,       desc="写命中清洁共享状态的位置脏（Store类指令命中Cache且非脏状态）";
+
+    //一次请求：Cache控制请求
+    WrVictimBlk,        desc="Cache回写请求，指示核心Cache中脏数据淘汰到核外";
+    EvictLoaclBlk,      desc="本地Cache淘汰请求，请求核外逻辑按主存地址淘汰本核心Cache中相应数据块，脏数据回写到核外";
+    EvictGlobalBlk,     desc="全局Cache淘汰请求，请求核外逻辑按主存地址淘汰本核外Cache和私有Cache中相应数据块，脏数据回写到主存";
+    EvictECacheBlk,     desc="核外Cache刷新请求，按核外Cache条目号淘汰所有Cache中相应数据块，脏数据写回到主存";
+    ECFetchBlk,         desc="核外Cache读类预取请求，读取的数据只进核外Cache，不进核心Cache";
+    ECFetchBlkMod,      desc="核外Cache写类预取请求，读取的数据只进核外Cache，不进核心Cache";
+
+    //一次请求：数据不可Cache访问请求
+    ReadNCBlk,          desc="不可Cache存储器读请求：支持读合并";
+    WriteNCBlk,         desc="不可Cache存储器写请求：带粒度和对应粒度的屏蔽码，支持写合并";
+    IORead,             desc="I/O读请求：带粒度和对应粒度的屏蔽码，不支持读合并";
+    IOWrite，           desc="I/O写请求：带粒度和对应粒度的屏蔽码，支持按规则进行写合并";
+
+    //一次请求：中断请求
+    INTReq,             desc="包含：核间中断0、1，睡眠中断，唤醒中断，异步消息中断，向量中断，不可屏蔽核间中断";
+
+    /*注：二次请求暂时没有命名，先瞎取名字，到时候再换回来*/
+    //二次请求：取数请求
+    Release,            desc="释放缓冲请求：释放指定缓冲条目";
+    GetR,               desc="取数并释放缓冲请求：取出指定缓冲条目中的数据并释放此缓冲条目";
+
+    //二次请求：Probe请求
+    PutI,               desc="置无效请求：不需要数据，产生不带数据的回答，命中SCache则将状态变为无效";
+    GetI,               desc="取数置无效：无条件需要数据，产生带数据的回答，命中SCache则将状态变为无效";
+    GteS,               desc="取数置共享：无条件需要数据，产生带数据的回答，命中SCache则将状态变为共享且非脏状态（即由脏独占状态变为共享状态，为清洁共享状态则不变）";
+    /************分界线**********/
+
+    //回答
+    NoDataResponse,     desc="该回答携带一致性查询状态，但不携带数据";
+    DataResponse,       desc="该回答携带一致性查询状态，且携带数据";
+
+    //响应
+    ReadData,           desc="不装填SCache的读响应，带128字节数据";
+    ReadDataShare，     desc="可Cache空间的带128字节数据的读响应，响应数据装填核心内Cache，并将核心内Cache状态修改为VSD='110'（清洁共享）";
+    ReadDataDirty,      desc="可Cache空间的带128字节数据的读响应，响应数据装填核心内Cache，并将核心内Cache状态修改为VSD=‘101'（脏独占）";
+    ChangeToDirtySuccess,   desc="置脏成功响应，无数据传输，响应将核心Cache状态改为VSD='101'";
+    ChangeToDirtyFail,  desc="置脏失败响应：无数据传输，表示ShareToDirty失败，用于释放核内的悬挂缓冲（SMAF）条目";
+    WriteComplete,      desc="写完成响应，无数据传输，表示WrVictimBlk、WriteNCBlk、IOWrite请求的写操作完成";
+    RequestComplete，   desc="请求处理完成响应，无数据传输。指一般共享可Cache请求的一致性处理完成，用于核心存储器栏栅计数器'-1'";
+    IllegalAddr,        desc="地址非法响应，无数据传输，可Cache或不可Cache请求地址非法或越界，I/O空间请求访问不存在的寄存器";
+    INTReqAck,          desc="指示发向核心的中断请求，无数据传输";          //因为和一次响应名字重了，先换个名字
+}
+
+//在L0和L1控制器之间发送的消息的类。
+structure(CoherenceMsg, desc="...", interface="Message") {
+    Addr addr,                    desc="Physical address of the cache block";       //缓存块的物理地址
+    CoherenceClass Class,         desc="Type of message (GetS, GetX, PutX, etc)";   //消息类型
+    RubyAccessMode AccessMode,    desc="user/supervisor access type";               //用户/管理员访问类型
+    MachineID Sender,             desc="What component sent this message";          //哪个组件发送了此消息
+    MachineID Dest,               desc="What machine receives this message";        //哪个机器接收到此消息
+    MessageSizeType MessageSize,  desc="size category of the message";              //消息的大小类别
+    DataBlock DataBlk,            desc="Data for the cache line (if PUTX)";         //缓存行数据（如果PUTX）
+    bool Dirty, default="false",  desc="Dirty bit";                                 //Dirty标志位，默认false
+    PrefetchBit Prefetch,         desc="Is this a prefetch request";                //这是预取请求吗
+
+    bool functionalRead(Packet *pkt) {
+        //只有PUTX消息包含数据块
+        if (Class == CoherenceClass:PUTX) {
+            return testAndRead(addr, DataBlk, pkt);
+        }
+        return false;
+    }
+
+    bool functionalWrite(Packet *pkt) {
+        //不需要检查消息类型，因为协议应该从包含块的消息中读取数据
+        return testAndWrite(addr, DataBlk, pkt);
+    }
+}

@@ -1,0 +1,193 @@
+machine(MachineType:L0Cache, "MSI Directory SCache")
+    :   Sequencer * sequencer;
+        CacheMemory * Scache;
+        Cycles request_latency := 2;
+        Cycles response_latency := 2;
+        bool send_evictions;
+
+        RubyPrefetcher * prefetcher;
+        bool enable_prefetch := "False";
+
+        //从该节点的L0缓存到网络
+        MessageBuffer * bufferToL1, network="To";
+
+        //从网络到该节点的L0缓存
+        MessageBuffer * bufferFromL1, network="From";
+
+        //此控制器和处理器之间的消息队列
+        MessageBuffer * mandatoryQueue;
+
+        //用于预取的请求缓冲区
+        MessageBuffer * prefetchQueue;
+{
+    state_declaration(State, desc="Cache states", default="L0Cache_State_I") {
+        // The cache entry has not been allocated. 尚未分配缓存项。
+        I, AccessPermission:Invalid, desc="Invalid（无效）";
+
+        // The cache entry is in shared mode. The processor can read this entry
+        // but it cannot write to it. 缓存项处于共享模式。处理器可以读取此条目，但不能写入。
+        S, AccessPermission:Read_Only, desc="Shared（清洁共享）";
+
+        // The processor has read and write permissions on this entry.处理器对此条目具有读写权限。
+        M, AccessPermission:Read_Write, desc="Modified（脏独占）";
+
+        /***********Transient States状态转换**************/
+        //I-->I   ack    Evict* 的请求（EvictLoaclBlk,EvictGlobalBlk,EvictECacheBlk）
+        IIA, AccessPermission:Busy, desc="Issued Evict* request, wait for ChangeToDirtyFail Ack";
+
+        //I-->I   data   响应无数据？??
+        IID, AccessPermission:Busy, desc="Get putinvalid, wait for NoDataResponse";
+
+        // The cache controller has requested that this entry be fetched in
+        // shared state so that the processor can read it. 缓存控制器已请求以共享状态获取此条目，以便处理器可以读取它。
+        //I-->S   data
+        ISD, AccessPermission:Busy, desc="Issued GETS, have not seen response yet(尚未收到回复)";
+
+        // The cache controller has requested that this entry be fetched in
+        // modify state so that the processor can read/write it. //高速缓存控制器已请求在脏状态下获取该条目，以便处理器可以读取/写入该条目。
+        //I-->M   ack
+        IMA, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
+
+        //I-->M    data
+        IMD, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
+
+        //I-->E    ack
+        IEA, AccessPermission:Busy, desc="Issued EvictLocalBlk/EvictECacheBlk, have not seen response yet";
+
+        // The cache controller had read permission over the entry. But now the
+        // processor needs to write to it. So, the controller has requested for
+        // write permission. 缓存控制器对该项具有读取权限。但现在处理器需要写入它。因此，控制器已请求写入权限
+        //S-->M     ack
+        SMA, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
+        //S-->M     data
+        SMD, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
+
+        //S-->I     data
+        SID, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
+        
+        //S-->I     data    ack
+        SIDA, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
+
+        //S-->S
+        SS, AccessPermission:Read_Only, desc="Issued EVICT*, have not seen response yet";
+
+        //M-->S     data
+        MSD, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
+
+        //M-->I     data
+        MID, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
+
+        //M-->M     ack
+        MMA, AccessPermission:Busy, desc="Issued EvictGlobalBlk/EvictECacheBlk, have not seen response yet";
+
+        // Transient states in which block is being prefetched正在预取块的瞬态状态
+        PF_FA, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
+        PF_WA, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
+    }
+
+    enumeration(Event, desc="Cache events") {
+        // Events from core
+        Load,                       desc="Load request from the home processor来自主处理器的加载请求";
+        ReadNCBlk,                  desc="uncached Load request from the home processor来自主处理器的未缓存加载请求";
+        Ifetch,                     desc="I-fetch request from the home processor";
+        Store_miss,                 desc="Store request from the home processor";
+        Store_hit,                  desc="Store request from the home processor";
+        WriteNCBlk,                 desc="uncached Store";
+
+        // requests from LCPM (due to self or other core)
+        GSN_PUTINV,                 desc="set Data Invalid ";
+        GSN_GETINV,                 desc="Get Data and set Invalid gsn from LCPM";
+        GSN_GETS,                   desc="Get Data and set shared gsn from LCPM";
+        GSN_GETRELEASE,             desc="Get Data and release(释放缓冲) gsn from LCPM";
+        GSN_NCGETRELEASE,           desc="nocache addr Get Data and release gsn from LCPM";
+        GSN_RELEASE,                desc="Release gsn from LCPM";
+
+        // internal generated request内部生成的请求
+        WrVictimBlk_R,              desc="Scache cache line Replacement", format="!r";
+
+        //Replacement替换
+        EvictLocalBlk_R,            desc="L0 Replacement, Scache cache line Replacement", format="!r";
+        EvictECacheBlk_R,           desc="Scache cache line Replacement", format="!r";
+
+        //FLUSH
+        EvictGlobalBlk_R,           desc="Scache cache line Replacement", format="!r";
+
+        //rsp for gsn(rq2), for processor
+        Data_Response,              desc="Data for processor";
+        NoData_Response,            desc="Data for processor, but not for storage";
+
+        //ack for grq(rq1), for processor
+        ReadData_Ack,               desc="Ack envents for FetchBlkI,IORead";
+        ReadNCData_Ack,             desc="Ack events for ReadNCBlk"
+        ReadDataShare_Ack,          desc="Ack for ReadBlkI,ReadBlkIDVic,ReadBlk,ReadBlkDVic";
+        ReadDataDirty_Ack,          desc="ReadBlkMod,ReadBlkDVic";
+        ChangeToDirtySuccess_Ack,   desc="ShareToDirty";
+        ChangeToDirtyFail_Ack,      desc="ShareToDirty fail, EvictECacheBlk,EvictLocalBlk,EvictECacheBlk";
+        WriteComplete_Ack,          desc="WrVictimBlk,IOWrite";
+        WriteNCComplete_Ack,        desc="WriteNCBlk, WriteNCComplete_Ack";
+        RequestComplete_Ack,        desc="";
+        IllegalAddr_Ack,            desc="地址非法";
+        INTReq_Ack,                 desc="向核心发送的中断请求";
+
+        // Prefetch events (generated by prefetcher)
+        PF_L0_Replacement,          desc="L0 Replacement caused by pretcher", format="!pr";
+
+        ECFetchBlk_R,               desc="Load request from prefetcher";
+        ECFetchBlkMod_R,            desc="Instruction fetch request from prefetcher";
+        PF_Bad_Addr,                desc="Throw away prefetch request due to bad address generation";
+    }
+
+
+    // TBE fields 字段
+    structure(TBE, desc="...") {
+        Addr addr,                      desc="Physical address for this TBE";
+        State TBEState,                 desc="Transient state";
+        DataBlock DataBlk,              desc="Buffer for the data block";
+        bool Dirty, default="false",    desc="data is dirty";
+        int pendingAcks, default="0",   desc="number of pending acks";
+    }
+
+
+
+
+
+    //a_issueReadBlk 行为
+    action(a_issueReadBlk, "a", desc="Issue ReadBlk") {
+        //用于提取消息队列开头的消息的函数。该函数假定队列为非空。
+        peek(mandatoryQueue_in, RubyRequest) {
+            //enqueue(信息，当前时间，请求等待时间)
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;                        //输出信息的地址
+                out_msg.Class := CoherenceClass:ReadBlk;        //输出信息的类型
+                out_msg.Sender := machineID;                    //输出信息的机器码
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                        address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+
+
+
+
+
+
+    //local核心向LCPM发送 ReadBlkDVic 请求   I-->s  ====>   I-->ISD  ISD-->S
+    transition(I, ReadBlkDVic, ISD) {
+        a_issueReadBlk;
+        issue_evict;  //send evict to lcpm & deallocate evict Scache & allocate tbe for evict addr
+        oo_allocateSCacheBlock; //for read
+        i_uncache_allocateTBE; //for read
+        uu_profileDataMiss;  //记录更新miss状态
+        po_observeMiss;  //通知预取器cache miss
+        k_popMandatoryQueue;  //弹出event
+    }
+
+
+
+
+
+}
