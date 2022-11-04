@@ -1,0 +1,69 @@
+说明文档：
+四种状态：无效(I Invalid)，清洁独占(E Exclusive)，脏独占(M Modified)，清洁共享(S Shared)
+
+
+1.peek()函数:
+    //用于提取消息队列开头的消息的函数。该函数假定队列为非空。
+    //第一个参数：消息队列   第二个参数：消息类型
+    peek(mandatoryQueue_in, RubyRequest);
+
+2.out_port()函数:
+    //将bufferToL1和prefetchQueue 重命名为 requestNetwork_out和optionalQueue_out
+    out_port(requestNetwork_out, CoherenceMsg, bufferToL1);
+    out_port(optionalQueue_out, RubyRequest, prefetchQueue);
+
+3.RubyRequestType的类型：
+    LD:                 装载
+    ST:                 存储
+    ATOMIC：            原子加载/存储———已取消
+    ATOMIC_RETURN:      原子加载/存储———返回数据
+    ATOMIC_NO_RETURN:   原子加载/存储———不返回数据
+    IFETCH：            取指令
+    IO:                 I/O 
+    REPLACEMEMT:        刷新（产生的效果）
+    Load_Linked:        负载链接
+    Store_Conditional:  存储条件
+    RMW_Read:
+    RMW_Write:
+    Locked_RMW_Read:
+    Locked_RMW_Write:
+    COMMIT:             提交版本
+    NULL:               请求类型无效
+    FLUSH:              刷新请求类型（具体存在）
+    Release:            释放操作
+    Acquire:            获取操作
+    AcquireRelease:     获取和发布操作
+    HTM_Start:          硬件内存事务：开始
+    HTM_Commit:         硬件内存事务：提交
+    HTM_Cancel:         硬件内存事务：取消
+    HTM_Abort:          硬件内存事务：中止
+    TLBI:               TLB失效-启动
+    TLBI_SYNC:          TLB失效同步操作-潜在启动
+    TLBI_EXT_SYNC:      TLB无效同步操作-已请求外部同步
+    TLBI_EXT_SYNC_COMP: TLB无效同步操作-外部同步已完成
+    NUM:                
+
+
+
+ 4.enqueue()函数：
+    //信息，当前时间，请求等待时间
+    enqueue(requestNetwork_out, CoherenceMsg, request_latency)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+问题：
+
+
