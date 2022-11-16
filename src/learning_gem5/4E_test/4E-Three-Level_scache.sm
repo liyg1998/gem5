@@ -31,22 +31,22 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         // The processor has read and write permissions on this entry.处理器对此条目具有读写权限。
         M, AccessPermission:Read_Write, desc="Modified（脏独占）";
 
-        /***********Transient States状态转换**************/
-        //I-->I   ack    Evict* 的请求（EvictLoaclBlk,EvictGlobalBlk,EvictECacheBlk）
-        IIA, AccessPermission:Busy, desc="Issued Evict* request, wait for ChangeToDirtyFail Ack";
-
-        //I-->I   data   响应无数据？??
-        IID, AccessPermission:Busy, desc="Get putinvalid, wait for NoDataResponse";
+        // /***********Transient States状态转换**************/
+        // //I-->I   ack    Evict* 的请求（EvictLoaclBlk,EvictGlobalBlk,EvictECacheBlk）
+        // IIA, AccessPermission:Busy, desc="Issued Evict* request, wait for ChangeToDirtyFail Ack";
+ 
+        // //I-->I   data   响应无数据？??
+        // IID, AccessPermission:Busy, desc="Get putinvalid, wait for NoDataResponse";
 
         // The cache controller has requested that this entry be fetched in
         // shared state so that the processor can read it. 缓存控制器已请求以共享状态获取此条目，以便处理器可以读取它。
         //I-->S   data
         ISD, AccessPermission:Busy, desc="Issued GETS, have not seen response yet(尚未收到回复)";
 
-        // The cache controller has requested that this entry be fetched in
-        // modify state so that the processor can read/write it. //高速缓存控制器已请求在脏状态下获取该条目，以便处理器可以读取/写入该条目。
-        //I-->M   ack
-        IMA, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
+        // // The cache controller has requested that this entry be fetched in
+        // // modify state so that the processor can read/write it. //高速缓存控制器已请求在脏状态下获取该条目，以便处理器可以读取/写入该条目。
+        // //I-->M   ack
+        // IMA, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
 
         //I-->M    data
         IMD, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
@@ -59,26 +59,27 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         // write permission. 缓存控制器对该项具有读取权限。但现在处理器需要写入它。因此，控制器已请求写入权限
         //S-->M     ack
         SMA, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
-        //S-->M     data
-        SMD, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
-
-        //S-->I     data
-        SID, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
         
-        //S-->I     data    ack
-        SIDA, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
-
-        //S-->S
-        SS, AccessPermission:Read_Only, desc="Issued EVICT*, have not seen response yet";
-
-        //M-->S     data
-        MSD, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
-
-        //M-->I     data
-        MID, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
-
-        //M-->M     ack
-        MMA, AccessPermission:Busy, desc="Issued EvictGlobalBlk/EvictECacheBlk, have not seen response yet";
+        // //S-->M     data
+        // SMD, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
+ 
+        // //S-->I     data
+        // SID, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
+        // 
+        // //S-->I     data    ack
+        // SIDA, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
+ 
+        // //S-->S
+        // SS, AccessPermission:Read_Only, desc="Issued EVICT*, have not seen response yet";
+ 
+        // //M-->S     data
+        // MSD, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
+         
+        // //M-->I     data
+        // MID, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
+ 
+        // //M-->M     ack
+        // MMA, AccessPermission:Busy, desc="Issued EvictGlobalBlk/EvictECacheBlk, have not seen response yet";
 
         // Transient states in which block is being prefetched正在预取块的瞬态状态
         PF_FA, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
@@ -87,11 +88,12 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
 
     enumeration(Event, desc="Cache events") {
         // Events from core  来自核心的事件
-        Load,                       desc="Load request from the home processor来自主处理器的加载请求";
+        Load,                       desc="Load request from the home processor来自主处理器的加载请求";  //就是 ReadBlk
+        ReadBlkIDVic,               desc="带脏淘汰的取值令请求";
+        ReadBlkDVic,                desc="带脏淘汰的取数请求";
         ReadNCBlk,                  desc="uncached Load request from the home processor来自主处理器的未缓存加载请求";
-        Ifetch,                     desc="I-fetch request from the home processor 来自home处理器的I-fetch请求";
-        Store_miss,                 desc="Store request from the home processor";
-        Store_hit,                  desc="Store request from the home processor";
+        Ifetch,                     desc="I-fetch request from the home processor 来自home处理器的I-fetch请求";  //ReadBlkI
+        Store,                      desc="Store request from the home processor";
         WriteNCBlk,                 desc="uncached Store";
 
         // requests from LCPM (due to self or other core) LCPM的（二次）请求（由于自身或其他核心）
@@ -136,8 +138,18 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         PF_Bad_Addr,                desc="Throw away prefetch request due to bad address generation";
     }
 
+    // CacheEntry
+    // TODO
+    structure(Entry, desc="...", interface="AbstractCacheEntry" ) {
+        State CacheState,        desc="cache state";
+        DataBlock DataBlk,       desc="data for the block";
+        bool Dirty, default="false",   desc="data is dirty";
+        bool isPrefetched, default="false", desc="Set if this block was prefetched";
+    }
+
 
     // TBE fields 字段
+    // 悬挂请求信息的
     structure(TBE, desc="...") {
         Addr addr,                      desc="Physical address for this TBE";
         State TBEState,                 desc="Transient state";
@@ -146,8 +158,9 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         int pendingAcks, default="0",   desc="number of pending acks";
     }
 
+    //TODO
     structure(TBETable, external="yes") {
-        TBE lookup(Addr);
+        TBE lookup(Addr);    //与TBE的结构有关系吗
         void allocate(Addr);
         void deallocate(Addr);
         bool isPresent(Addr);
@@ -155,12 +168,105 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
     }
 
     //TODO:定义全局变量
+    // 存储TBE表：
     TBETable TBEs, template="<L0Cache_TBE>", constructor="m_number_of_TBEs";
+
+    //声明函数
+    Tick clockEdge();  //时钟沿有效
+    Cycles ticksToCycles(Tick t); //
+    void set_cache_entry(AbstractCacheEntry a);  //设置Cache条目
+    void unset_cache_entry(); //撤销Cache条目
+    void set_tbe(TBE a);    //设置"缓冲"块
+    void unset_tbe();       //撤销“缓冲”块
+    void wakeUpBuffers(Addr a);  //唤醒被阻塞操作
+    void wakeUpAllBuffers(Addr a);
+    void profileMsgDelay(int virtualNetworkType, Cycles c);   //性能计数，观测使用
+
+    //允许我们在运行时更改存储目录或缓存的地址映射，
+    MachineID mapAddressToMachine(Addr addr, MachineType mtype);
+
+    // 包含缓存仅返回L0个条目
+    Entry getCacheEntry(Addr addr), return_by_pointer="yes" {
+        Entry Scache_entry := static_cast(Entry, "pointer", Scache[addr]);
+        // 如果SCache条目有效，返回TCache
+        if(is_valid(Scache_entry)) {
+            return Dcache_entry;
+        }
+    }
 
     //获取Scache条目
     Entry getSCacheEntry(Addr addr), return_by_pointer="yes" {
         Entry Scache_entry := static_cast(Entry, "pointer", Scache[addr]);
         return Scache_entry;
+    }
+
+    //TODO
+    State getState(TBE tbe, Entry cache_entry, Addr addr) {
+        //判断Scache和ICache当前的地址是不是有一个不存在？
+        assert((Scache.isTagPresent(addr) && Icache.isTagPresent(addr)) == false);
+        if(is_valid(tbe)) {
+            return tbe.TBEState;
+        } else if (is_valid(cache_entry)) {
+            return cache_entry.CacheState;
+        }
+        return State:I;
+    }
+
+    //TODO
+    void setState(TBE tbe, Entry cache_entry, Addr addr, State state) {
+        assert((Scache.isTagPresent(addr)) == false);
+        // MUST CHANGE
+        if(is_valid(tbe)) {
+            tbe.TBEState := state;
+        }
+        if (is_valid(cache_entry)) {
+            cache_entry.CacheState := state;
+        }
+    }
+
+    //TODO
+    AccessPermission getAccessPermission(Addr addr) {
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            DPRINTF(RubySlicc, "%s\n", L0Cache_State_to_permission(tbe.TBEState));
+            return L0Cache_State_to_permission(tbe.TBEState);
+        }
+        Entry cache_entry := getCacheEntry(addr);
+        if(is_valid(cache_entry)) {
+            DPRINTF(RubySlicc, "%s\n", L0Cache_State_to_permission(cache_entry.CacheState));
+            return L0Cache_State_to_permission(cache_entry.CacheState);
+        }
+        DPRINTF(RubySlicc, "%s\n", AccessPermission:NotPresent);
+        return AccessPermission:NotPresent;
+    }
+
+    //TODO
+    void functionalRead(Addr addr, Packet *pkt) {
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            testAndRead(addr, tbe.DataBlk, pkt);
+        } else {
+            testAndRead(addr, getCacheEntry(addr).DataBlk, pkt);
+        }
+    }
+
+    //TODO
+    int functionalWrite(Addr addr, Packet *pkt) {
+        int num_functional_writes := 0;
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            num_functional_writes := num_functional_writes + testAndWrite(addr, tbe.DataBlk, pkt);
+            return num_functional_writes;
+        }
+        num_functional_writes := num_functional_writes + testAndWrite(addr, getCacheEntry(addr).DataBlk, pkt);
+        return num_functional_writes;
+    }
+
+    //TODO
+    void setAccessPermission(Entry cache_entry, Addr addr, State state) {
+        if (is_valid(cache_entry)) {
+            cache_entry.changePermission(L0Cache_State_to_permission(state));
+        }
     }
 
     //[29] == 0     EvictLocalBlk 刷新SCache
@@ -194,12 +300,11 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         //请求类型：存储 || 原子加载/存储———已取消 || 存储条件
         } else if ((type == RubyRequestType:ST) || (type == RubyRequestType:ATOMIC) || (type == RubyRequestType:Store_Conditional)) {
             if(isCached(addr)) {            //可Cache
-                if(is_hit)                  //命中
-                    return Event:Store_hit; //写命中
-                else if(is_vic) {           //不命中且淘汰
+                if(is_vic) {
                     return Event:ReadBlkModDVic;    //带脏淘汰的存储器修改读请求
-                } else
-                    return Event:Store_miss;        //写MISS               
+                } else {
+                    return Event:Store
+                }          
             } else                          //不可Cache
                 return Event:WriteNCBlk;    //不可Cache写请求              
         } else {
@@ -207,10 +312,36 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
+    //TODO
+    Event prefetch_request_type_to_event(RubyRequestType type) {
+        if (type == RubyRequestType:LD || type == RubyRequestType:IFETCH) {
+            return Event:ECFetchBlk;
+        } else if (type == RubyRequestType:ST) {
+            return Event:ECFetchBlkMod;
+        } else {
+            error("Invalid RubyRequestType");
+        }
+    }
 
-    //将bufferToL1和prefetchQueue 重命名为 requestNetwork_out和optionalQueue_out
+    //TODO
+    int getPendingAcks(TBE tbe) {
+        return tbe.pendingAcks;
+    }
+
+    // 将bufferToL1和prefetchQueue 重命名为 requestNetwork_out和optionalQueue_out
+    // 第二个参数是消息类型
     out_port(requestNetwork_out, CoherenceMsg, bufferToL1);
-    out_port(optionalQueue_out, RubyRequest, prefetchQueue);
+    out_port(optionalQueue_out, RubyRequest, prefetchQueue); //TODO:自带的类型，自己查看
+
+    //TODO
+    void enqueuePrefetch(Addr address, RubyRequestType type) {
+        enqueue(optionalQueue_out, RubyRequest, 1) {
+            out_msg.LineAddress := address;
+            out_msg.Type := type;
+            out_msg.Prefetch := PrefetchBit:Yes;
+            out_msg.AccessMode := RubyAccessMode:Supervisor;
+        }
+    }
 
     //控制器和预取器之间的预取队列根据Spracklen等人（HPCA 2005），
     //预取队列应实现为后进先出结构。该结构将允许快速搜索队列中的所有条目，
@@ -257,9 +388,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                         // No room in the L0-I, so we need to make room in the L0-I
                         Addr addr := Icache.cacheProbe(in_msg.LineAddress);
                         check_on_cache_probe(optionalQueue_in, addr);
-
-                        trigger(Event:PF_L0_Replacement, addr,
-                            getICacheEntry(addr), TBEs[addr]);
+                        trigger(Event:PF_L0_Replacement, addr, getICacheEntry(addr), TBEs[addr]);
                     }
                 } else {
                     // Data prefetch
@@ -290,40 +419,44 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                         // No room in the L0-D, so we need to make room in the L0-D
                         Addr addr := Scache.cacheProbe(in_msg.LineAddress);
                         check_on_cache_probe(optionalQueue_in, addr);
-
-                        trigger(Event:PF_L0_Replacement, addr,
-                            getSCacheEntry(addr), TBEs[addr]);
+                        trigger(Event:PF_L0_Replacement, addr, getSCacheEntry(addr), TBEs[addr]);
                     }
                 }
             }
         }
     }
 
-    // Messages for this L0 cache from the L1 cache
+    // Messages for this L0 cache from the L1 cache 
+    // 来自一级缓存的此L0缓存的消息
     in_port(messgeBuffer_in, CoherenceMsg, bufferFromL1, rank = 1) {
         if (messgeBuffer_in.isReady(clockEdge())) {
+            //addr相同地址阻塞
             peek(messgeBuffer_in, CoherenceMsg, block_on="addr") {
                 assert(in_msg.Dest == machineID);
+                //查表
                 TBE tbe := TBEs[in_msg.addr];
-
+                //获取Cache条目
                 Entry cache_entry := getCacheEntry(in_msg.addr);
-
-                if(in_msg.Class == CoherenceClass:ReadData) {
-                    if(isCached(in_msg.addr))
+                //判断响应类型是否为ReadData
+                if(in_msg.Class == CoherenceClass:ReadData) { 
+                    if(isCached(in_msg.addr)) { //是否Cache
+                        //FetchBlkI请求  应该
                         trigger(Event:ReadData_Ack, in_msg.addr, cache_entry, tbe);
-                    else {
+                    } else {
+                        //IORead请求/ReadNCBlk请求   应该
                         tbe.DataBlk := in_msg.DataBlk;
                         trigger(Event:ReadNCData_Ack, in_msg.addr, cache_entry, tbe);
                     }
+                //TODO
                 } else if(in_msg.Class == CoherenceClass:ReadDataShare) {
                     trigger(Event:ReadDataShare_Ack, in_msg.addr, cache_entry, tbe);
                 } else if(in_msg.Class == CoherenceClass:ReadDataDirty) {
                     trigger(Event:ReadDataDirty_Ack, in_msg.addr, cache_entry, tbe);
                 } else if(in_msg.Class == CoherenceClass:ChangeToDirtySuccess) {
                     trigger(Event:ChangeToDirtySuccess_Ack, in_msg.addr, cache_entry, tbe);
-                } else if(in_msg.Class == CoherenceClass:ChangeToDirtyFail_Ack) {
+                } else if(in_msg.Class == CoherenceClass:ChangeToDirtyFail_Ack) {    //这个是不是写错了，大概没有_ack
                     trigger(Event:ChangeToDirtyFail_Ack, in_msg.addr, cache_entry, tbe);
-                } else if(in_msg.Class == CoherenceClass:GetR) {
+                } else if(in_msg.Class == CoherenceClass:GetR) { 
                     if(isCached(in_msg.addr))
                         trigger(Event:GSN_GETRELEASE, in_msg.addr, cache_entry, tbe);
                     else
@@ -339,7 +472,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                     trigger(Event:GSN_GETINV, in_msg.addr, cache_entry, tbe);
                 } else if (in_msg.Class == CoherenceClass:GetS) {
                     trigger(Event:GSN_GETS, in_msg.addr, cache_entry, tbe);
-                } else if (in_msg.Class == CoherenceClass:GETX || in_msg.Class == CoherenceClass:UPGRADE) {
+                } else if (in_msg.Class == CoherenceClass:GETX || in_msg.Class == CoherenceClass:UPGRADE) {   //TODO没找到这个类型
                     // upgrade transforms to GETX due to race
                     trigger(Event:Fwd_GETX, in_msg.addr, cache_entry, tbe);
                 } else if (in_msg.Class == CoherenceClass:Release) {
@@ -349,12 +482,16 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                 } else {
                     error("Invalid forwarded request type");
                 }
+
+                //缺几个类型：INTReqAck  IllegalAddr 
             }
         }
     }
 
-    // Mandatory Queue betweens Node's CPU and it's L0 caches 节点的CPU与其L0缓存之间的强制队列
-    in_port(mandatoryQueue_in, RubyRequest, mandatoryQueue, desc="...", rank = 0) {
+    // Mandatory Queue betweens Node's CPU and it's L0 caches 
+    // 节点的CPU与其L0缓存之间的强制队列
+    // 参数： 接口 消息类型  消息队列
+    in_port(mandatoryQueue_in, RubyRequest, mandatoryQueue, desc="...", rank = 0) {  //从接口的队列取出信息
         if (mandatoryQueue_in.isReady(clockEdge())) {
             peek(mandatoryQueue_in, RubyRequest, block_on="LineAddress") {
                 // Check for data access to blocks in I-cache and ifetchs to blocks in D-cache
@@ -365,7 +502,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                     if (is_valid(Scache_entry)) {   //Scache条目有效
                         // The tag matches for the L0, so the L0 asks the L2 for it.
                         // 标签与L0匹配，因此L0向L2请求它。
-                        // 触发的事件:Ifetch 取值令请求
+                        // 触发的事件:Ifetch 取值令请求 
                         trigger(mandatory_request_type_to_event(in_msg.Type, in_msg.LineAddress, true, false), 
                             in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
                     } else {    //Scache条目无效
@@ -374,7 +511,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                             // L0 does't have the line, but we have space for it
                             // in the L0 so let's see if the L2 has it
                             // L0没有线条，但我们在L0中有空间，所以让我们看看L2是否有线条
-                            // 触发的事件:Ifetch 取值令请求
+                            // 触发的事件:Ifetch 取值令请求 ReadBlkI
                             trigger(mandatory_request_type_to_event(in_msg.Type, in_msg.LineAddress, false, false), 
                                 in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
                         } else {
@@ -384,25 +521,25 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                             Addr addr := Scache.cacheProbe(in_msg.LineAddress);  //准备淘汰的地址
                             check_on_cache_probe(mandatoryQueue_in, addr);       //地址是否在缓冲队列中
                             Scache_entry := getSCacheEntry(addr);           
-                            //触发的事件：ReadBlkDVic
+                            //触发的事件:ReadBlkIDVic
                             trigger(mandatory_request_type_to_event(in_msg.Type, addr ,false, true), 
                                 addr, Scache_entry, TBEs[in_msg.LineAddress]);
                         }
                     }
                 //Type：刷新
-                } else if (in_msg.Type == RubyRequestType:REPLACEMENT) {
+                } else if(in_msg.Type == RubyRequestType:REPLACEMENT) {
                     // No room in the L1, so we need to make room in the L0
                     // Check if the line we want to evict is not locked
                     // L1中没有空间，所以我们需要在L0中腾出空间。检查我们要驱逐的线路是否未锁定
                     Entry Scache_entry := getSCacheEntry(in_msg.LineAddress);
                     Addr addr := Scache.cacheProbe(in_msg.LineAddress);
                     check_on_cache_probe(mandatoryQueue_in, addr);
-                    if (getEvictType(addr))
+                    if(getEvictType(addr))
                         //触发事件:EvictECacheBlk_R
                         trigger(Event:EvictECacheBlk_R, in_msg.LineAddress, Scache_entry , TBEs[in_msg.LineAddress]);
                     else {
                         //Scache条目有效
-                        if (is_valid(Scache_entry))
+                        if(is_valid(Scache_entry))
                             //触发事件:EvictLocalBlk_R
                             trigger(Event:EvictLocalBlk_R, addr, getSCacheEntry(addr), TBEs[addr]);
                     }
@@ -432,7 +569,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                         if (is_valid(Scache_entry)) {   //有效-->命中
                             // The tag matches for the L0, so the L0 ask the L1 for it
                             // 标签与L0匹配，因此L0向L1请求它
-                            // 触发的事件:  Load/Store_hit  判断type:LD/ST 
+                            // 触发的事件:  Store  ST  
                             trigger(mandatory_request_type_to_event(in_msg.Type, in_msg.LineAddress, true, false), 
                                 in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
                         } else {
@@ -448,7 +585,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                                     // L1 does't have the line, but we have space for it
                                     // in the L0 let's see if the L1 has it
                                     // L1没有线条，但我们在L0中有空间，让我们看看L1是否有空间
-                                    // 触发的事件:  Load/Store_miss   判断type:LD/ST 
+                                    // 触发的事件:  Load 
                                     trigger(mandatory_request_type_to_event(in_msg.Type, in_msg.LineAddress,false, false), 
                                         in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
                                 } else {
@@ -458,7 +595,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                                     Addr addr := Scache.cacheProbe(in_msg.LineAddress);
                                     check_on_cache_probe(mandatoryQueue_in, addr);
                                     Scache_entry := getSCacheEntry(addr);
-                                    // 触发的事件:ReadBlkDVic/ReadBlkModDVic    判断type:LD/ST 
+                                    // 触发的事件:ReadBlkDVic    /ReadBlkModDVic    判断type:LD/ST 
                                     trigger(mandatory_request_type_to_event(in_msg.Type, addr, false, true), 
                                         in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
                                 }
@@ -470,16 +607,32 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
+    //TODO
+    action(a_issueGETS, "a", desc="Issue GetS") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:GetS;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
     //a_issueReadBlk 行为
-    //"a" 是啥意思
+    //"a" 标识符，
     action(a_issueReadBlk, "a", desc="Issue ReadBlk") {
         // 用于提取消息队列开头的消息的函数。该函数假定队列为非空。
         // 第一个参数：消息队列   第二个参数：消息类型
+        // RubyRequest 预取的请求缓冲区
         peek(mandatoryQueue_in, RubyRequest) {
-            // enqueue(信息，当前时间，请求等待时间)
-            //TODO: 参数都没使用？？？？/参数对吗
-            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
-                out_msg.addr := address;                        //输出信息的地址
+            // enqueue(接口，信息类型，延时)  传给接口的队列中
+            //CoherenceMsg L0 --> L1 的Cache信息
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {//(扔脏数据) 送出去
+                out_msg.addr := in_msg.LineAddress;                        //输出信息的地址
                 out_msg.Class := CoherenceClass:ReadBlk;        //输出信息的类型
                 out_msg.Sender := machineID;                    //输出信息的机器码
                 out_msg.Dest := createMachineID(MachineType:L1Cache, version);
@@ -491,54 +644,611 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
-    //发出驱逐令
-    //"isev"这个是干嘛用的
-    action(issue_evict, "isev", desc="issue vic info to L1") {
-        enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
-            //为什么又要重复做一遍
-            Addr addr := Scache.cacheProbe(address);        //准备淘汰的地址
-            check_on_cache_probe(mandatoryQueue_in, addr);  //地址是否在缓冲队列中
+    action(a_issueReadBlkDVic, "a", desc="Issue ReadBlkDVic") {
+        // 用于提取消息队列开头的消息的函数。该函数假定队列为非空。
+        // 第一个参数：消息队列   第二个参数：消息类型
+        // RubyRequest 预取的请求缓冲区
+        peek(mandatoryQueue_in, RubyRequest) {
+            // enqueue(接口，信息类型，延时)  传给接口的队列中
+            // CoherenceMsg L0 --> L1 的Cache信息
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) { //(扔脏数据) 将请求传输出去
+                out_msg.addr := in_msg.LineAddress;
+                out_msg.Class := CoherenceClass:ReadBlkDVic;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
 
-            assert(is_valid(cache_entry));      //TODO:断言？cache条目是否有效？干嘛用的
+    action(a_issueReadBlkIDVic, "ad", desc="Issue ReadBlkIDVic") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) { //(扔脏数据) 将请求传输出去
+                out_msg.addr := in_msg.LineAddress;
+                out_msg.Class := CoherenceClass:ReadBlkIDVic;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(a_issueReadBlkMod, "a", desc="Issue ReadBlkMod") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadBlkMod;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(a_issueReadNCBlk, "a", desc="Issue ReadBlk") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadNCBlk;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.request_size := in_msg.Size;
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.request_size := in_msg.Size;
+            }
+        }
+    }
+
+    //TODO
+    action(a_issueReadBlkI, "a", desc="Issue ReadBlkI") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := in_msg.LineAddress;
+                out_msg.Class := CoherenceClass:ReadBlkI;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(b_issueReadBlkMod, "b", desc="Issue ReadBlkMod") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadBlkMod;
+                out_msg.Sender := machineID;
+                DPRINTF(RubySlicc, "%s\n", machineID);
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(b_issueWriteNCBlk, "b", desc="Issue WriteNCBlk") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:WriteNCBlk;
+                out_msg.Sender := machineID;
+                out_msg.request_size := in_msg.Size;
+                DPRINTF(RubySlicc, "%s\n", machineID);
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);  
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                        address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(b_issueDataResponse, "bdr", desc="Issue DataResponse"){
+        enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:DataResponse;
+            out_msg.Sender := machineID;
+            DPRINTF(RubySlicc, "%s\n", machineID);
+            out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+            DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Dest);
+            out_msg.MessageSize := MessageSizeType:Control;
+            if(isCached(address)) {
+                if(is_valid(cache_entry)) {
+                    out_msg.DataBlk := cache_entry.DataBlk;
+                } else {
+                    out_msg.DataBlk := tbe.DataBlk;
+                }
+            } else {
+                out_msg.DataBlk := tbe.DataBlk;
+            }
+        }
+    }
+
+    //TODO
+    action(b_issueShareToDirty, "b", desc="Issue ShareToDirty") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ShareToDirty;
+                out_msg.Sender := machineID;
+                DPRINTF(RubySlicc, "%s\n", machineID);
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(elb_issueEvictLocalBlk, "elb", desc="Issue EvictLocalBlk") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:EvictLocalBlk;
+                out_msg.Sender := machineID;
+                DPRINTF(RubySlicc, "%s\n", machineID);
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(ecb_issueEvictECacheBlk, "ecb", desc="Issue EvictECacheBlk") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:EvictECacheBlk;
+                out_msg.Sender := machineID;
+                DPRINTF(RubySlicc, "%s\n", machineID);
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(f_sendDataToL1, "f", desc="Send data to the L1 cache") {
+        enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:DataResponse;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.Sender := machineID;
+            out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+            out_msg.MessageSize := MessageSizeType:Writeback_Data;
+        }
+        cache_entry.Dirty := false;
+    }
+
+    //TODO
+    action(fi_sendInvAck, "fi0", desc="Send data to the L1 cache") {
+        peek(messgeBuffer_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:NoDataResponse;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                out_msg.MessageSize := MessageSizeType:Response_Control;
+            }
+        }
+    }
+
+    //TODO
+    action(fi_sendGetInvAck, "fi1", desc="Send data to the L1 cache") {
+        peek(messgeBuffer_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:DataResponse;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                out_msg.MessageSize := MessageSizeType:Response_Control;
+                out_msg.DataBlk := cache_entry.DataBlk;
+            }
+        }
+    }
+
+    //TODO
+    action(forward_eviction_to_cpu, "\cc", desc="Send eviction information to the processor") {
+        if (send_evictions && isCached(address)) {
+            DPRINTF(RubySlicc, "Sending invalidation for %#x to the CPU\n", address);
+            sequencer.evictionCallback(address);
+        }
+    }
+
+    //TODO
+    action(h_load_hit, "hd", desc="Notify sequencer the load completed (cache hit)") {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
+        Scache.setMRU(cache_entry);
+        sequencer.readCallback(address, cache_entry.DataBlk);
+    }
+
+    //TODO
+    action(h_ifetch_hit, "hi", desc="Notify sequencer the ifetch completed (cache hit)") {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
+        Scache.setMRU(cache_entry);
+        sequencer.readCallback(address, cache_entry.DataBlk);
+    }
+
+    //TODO
+    // The action name uses a counterintuitive _hit prefix when it is only
+    // called due to a cache miss. It is technically now a hit after having
+    // serviced the miss.
+    // 当仅由于缓存未命中而调用操作名时，该操作名使用了一个违背直觉的_hit前缀。
+    // 从技术上讲，它现在是在服务了未命中之后的命中。
+    action(hx_load_hit, "hxd", desc="Notify sequencer the load completed (cache miss) 通知序列器加载完成（缓存未命中）") {
+        assert(is_valid(cache_entry));  //断言
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk); //打印
+        Scache.setMRU(cache_entry);     //Cache条目设置什么东西吧（不管先）
+        sequencer.readCallback(address, cache_entry.DataBlk, true); //读取回调
+    }
+
+    //TODO
+    action(nc_load_hit, "ncd", desc="Notify sequencer the load completed (cache miss)") {
+        DPRINTF(RubySlicc, "%s\n", tbe.DataBlk);
+        sequencer.readCallback(address,  tbe.DataBlk, true);
+    }
+
+    //TODO
+    // The action name uses a counterintuitive _hit prefix when it is only
+    // called due to a cache miss. It is technically now a hit after having
+    // serviced the miss.
+    action(hx_ifetch_hit, "hxi", desc="Notify sequencer the ifetch completed (cache miss)") {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
+        Icache.setMRU(cache_entry);
+        sequencer.readCallback(address, cache_entry.DataBlk, true);
+    }
+
+    //TODO
+    action(hh_store_hit, "\h", desc="Notify sequencer that store completed (cache hit)") {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
+        Dcache.setMRU(cache_entry);
+        sequencer.writeCallback(address, cache_entry.DataBlk);
+        cache_entry.Dirty := true;
+    }
+
+    //TODO
+    // The action name uses a counterintuitive _hit prefix when it is only
+    // called due to a cache miss. It is technically now a hit after having
+    // serviced the miss.
+    action(hhx_store_hit, "\hx", desc="Notify sequencer that store completed (cache miss)") {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
+        Scache.setMRU(cache_entry);
+        sequencer.writeCallback(address, cache_entry.DataBlk, true);
+        cache_entry.Dirty := true;
+   }
+
+    //TODO
+    action(nc_hhx_store_hit, "\nchx", desc="Notify sequencer that store completed (cache miss)") {
+        assert(is_valid(tbe));
+        DPRINTF(RubySlicc, "%s\n", tbe.DataBlk);
+        sequencer.writeCallback(address, tbe.DataBlk, true);
+    }
+
+    //分配TBE
+    action(i_allocateTBE, "i", desc="Allocate TBE (number of invalidates=0)  分配TBE（无效数=0）") {
+        check_allocate(TBEs);
+        assert(is_valid(cache_entry));
+        TBEs.allocate(address);     //TODO  这个地址是哪里来的
+        set_tbe(TBEs[address]);
+        tbe.Dirty := cache_entry.Dirty;
+        tbe.DataBlk := cache_entry.DataBlk;
+    }
+
+    action(i_uncache_allocateTBE, "iun", desc="uncached Allocate TBE (number of invalidates=0)(未缓存的分配TBE（无效数=0）)") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            //检查分配TBE （另）
+            check_allocate(TBEs);
+            //分配
+            TBEs.allocate(in_msg.LineAddress);
+            //设置TBE
+            set_tbe(TBEs[in_msg.LineAddress]);
+            //请求的数据（可不带）
+            tbe.DataBlk := in_msg.WTData;
+        }
+    }
+
+    //发出驱逐令 触发 WrVictimBlk
+    action(issue_evict, "isev", desc="issue vic info to L1(向L1发布vic信息)") {
+        enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+            //Addr addr := Scache.cacheProbe(address/*trigger传过来的数据*/);        //准备淘汰的地址
+            //check_on_cache_probe(mandatoryQueue_in, addr);  //地址是否在缓冲队列中 (结果用在哪里，)
+
+            assert(is_valid(cache_entry));
             out_msg.addr := addr;
-            if(cache_entry.Dirty) //如果Cache条目脏的？ 
-                //TODO:class是干嘛的，Cache回写请求？  信息的类型？ 那NOP呢
+            if(cache_entry.Dirty)
                 out_msg.Class := CoherenceClass:WrVictimBlk;    
             else
                 out_msg.Class := Nop;
-            //输出口的数据有啥需要考虑的吗，或者要求
             out_msg.Dirty := cache_entry.Dirty;
             out_msg.Sender:= machineID;
             out_msg.Dest := createMachineID(MachineType:L1Cache, version);  
             out_msg.MessageSize := MessageSizeType:Writeback_Control;
 
-            //检查TBEs？？
+            //检查大表TBEs
             check_allocate(TBEs);
-            //地址分配？
+            //分配表项
             TBEs.allocate(addr);
-            //TODO
+            //填充
             set_tbe(TBEs[addr]);
-            //淘汰？
+            //TBE表项拿出来   指针地址
             TBE tbe_evic := TBEs[addr];
-            //这又是啥
+            //放数据
             tbe_evic.DataBlk := cache_entry.DataBlk;
-            //TODO:解除分配
+            //淘汰Scache地址
             Scache.deallocate(addr);
-            //TODO:这个函数。。。。
+            //注销Cache条目
             unset_cache_entry();
         }
     }
 
+    //弹出event
+    action(k_popMandatoryQueue, "k", desc="Pop mandatory queue 弹出强制队列") {
+        mandatoryQueue_in.dequeue(clockEdge());
+    }
 
+    //TODO
+    action(l_popRequestQueue, "l", desc="Pop incoming request queue and profile the delay within this virtual network") {
+        Tick delay := messgeBuffer_in.dequeue(clockEdge());
+        profileMsgDelay(2, ticksToCycles(delay));
+    }
 
+    action(o_popIncomingResponseQueue, "o", desc="Pop Incoming Response queue and profile
+        the delay within this virtual network 弹出传入响应队列并配置此虚拟网络中的延迟") {
+        Tick delay := messgeBuffer_in.dequeue(clockEdge()); //撤销队列信息
+        profileMsgDelay(1, ticksToCycles(delay));           //不管
+    }
 
+    action(s_deallocateTBE, "s", desc="Deallocate TBE 取消分配TBE") {
+        if(is_valid(tbe)) { //如果tbe有效
+            TBEs.deallocate(address);   //撤销分配
+            unset_tbe();        //撤销表项
+        }
+    }
 
+    action(u_writeDataToCache, "u", desc="Write data to cache 将数据写入缓存") {
+        peek(messgeBuffer_in, CoherenceMsg) {
+            assert(is_valid(cache_entry)); //断言
+            cache_entry.DataBlk := in_msg.DataBlk;    //数据写入缓存  
+        }
+    }
 
+    //TODO
+    action(u_writeInstToCache, "ui", desc="Write data to cache") {
+        peek(messgeBuffer_in, CoherenceMsg) {
+        assert(is_valid(cache_entry));
+        cache_entry.DataBlk := in_msg.DataBlk;
+        }
+    }
 
-    //local核心向LCPM发送 ReadBlkDVic(读产生的带脏淘汰取数请求)   I-->s  ====>   I-->ISD  ISD-->S
+    //TODO
+    action(ff_deallocateCacheBlock, "\f", desc="Deallocate L1 cache block.") {
+        if(isCached(address)){
+            if(is_valid(cache_entry)){
+                cache.deallocate(address);
+                unset_cache_entry();
+            }
+        }
+    }
+
+    action(oo_allocateSCacheBlock, "\o", desc="Set L1 D-cache tag equal to tag of block B(将L1 D-cache标记设置为块B的标记)") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            //获取的SCache条目是无效的
+            if (is_invalid(getSCacheEntry(in_msg.LineAddress))) {
+                //设置Cache条目：分配新的条目
+                set_cache_entry(Scache.allocate(in_msg.LineAddress, new Entry));
+            }
+        }
+    }
+
+    //TODO
+    action(z_stallAndWaitMandatoryQueue, "\z", desc="Stall cpu request queue") {
+        stall_and_wait(mandatoryQueue_in, address);
+    }
+
+    action(kd_wakeUpDependents, "kd", desc="Wake-up dependents 唤醒从属/依赖") {
+        wakeUpAllBuffers(address);
+    }
+
+    //TODO
+    action(uu_profileInstMiss, "\ui", desc="Profile the demand miss") {
+        Icache.profileDemandMiss();
+    }
+
+    //TODO
+    action(uu_profileInstHit, "\uih", desc="Profile the demand hit") {
+        Icache.profileDemandHit();
+    }
+
+    action(uu_profileDataMiss, "\ud", desc="Profile the demand miss(配置需求未命中)") {
+        //这是声明配置需求未命中
+        Scache.profileDemandMiss();
+    }
+
+    //TODO
+    action(uu_profileDataHit, "\udh", desc="Profile the demand hit") {
+        Dcache.profileDemandHit();
+    }
+
+    //TODO
+    action(hhc_storec_fail, "\hc", desc="Notify sequencer that store conditional failed") {
+        sequencer.writeCallbackScFail(address, cache_entry.DataBlk);
+    }
+
+    // prefetching
+    //TODO
+    action(pa_issueEctechBlk, "pa", desc="Issue prefetch GETS") {
+        peek(optionalQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ECFetchBlk;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.Prefetch := in_msg.Prefetch;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(pb_issueEctechBlkMod, "pb", desc="Issue prefetch GETS") {
+        peek(optionalQueue_in, RubyRequest) {
+            enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ECFetchBlkMod;
+                out_msg.Sender := machineID;
+                out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Dest);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.Prefetch := in_msg.Prefetch;
+                out_msg.AccessMode := in_msg.AccessMode;
+            }
+        }
+    }
+
+    //TODO
+    action(pq_popPrefetchQueue, "\pq", desc="Pop the prefetch request queue") {
+        optionalQueue_in.dequeue(clockEdge());
+    }
+
+    //TODO
+    action(mp_markPrefetched, "mp", desc="Write data from response queue to cache") {
+        assert(is_valid(cache_entry));
+        cache_entry.isPrefetched := true;
+    }
+
+    action(po_observeMiss, "\po", desc="Inform the prefetcher about a cache miss 通知预取器缓存未命中") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            if (enable_prefetch) {  //启动预留
+                prefetcher.observeMiss(in_msg.LineAddress, in_msg.Type);
+            }
+        }
+    }
+
+    //TODO
+    action(ppm_observePfMiss, "\ppm", desc="Inform the prefetcher about a cache miss with in-flight prefetch") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            prefetcher.observePfMiss(in_msg.LineAddress);
+        }
+    }
+
+    //TODO
+    action(pph_observePfHit, "\pph", desc="Inform the prefetcher if a cache hit was the result of a prefetch") {
+        peek(mandatoryQueue_in, RubyRequest) {
+            if (cache_entry.isPrefetched) {
+                prefetcher.observePfHit(in_msg.LineAddress);
+                cache_entry.isPrefetched := false;
+            }
+        }
+    }
+
+    //TODO
+    action(z_stallAndWaitOptionalQueue, "\pz", desc="recycle prefetch request queue") {
+        stall_and_wait(optionalQueue_in, address);
+    }
+
+    /***********************Transitions**************************************/
+    //TODO
+    // Transitions for Load/Store/Replacement/WriteBack from transient states
+    transition({IMD, ISD, SMA, PF_FA, PF_WA, IEA}, {Load, Ifetch, Store_hit, Store_miss, ReadBlkIDVic,ReadNCBlk,ReadBlkDVic,WriteNCBlk}) {
+        z_stallAndWaitMandatoryQueue;
+    }
+
+    // 从空闲状态转换
+    // ReadBlk   它的响应还是 ReadDataShare
+    transition(I, Load, ISD) {
+        oo_allocateSCacheBlock;     //没必要重新分配新条目吧 无效的条目为啥要重新分配
+        i_allocateTBE;              //分配TBE没有必要吧  使用的address在哪传过来的，没找到目标
+        a_issueReadBlk;             //将请求传输出去
+        uu_profileDataMiss;         //记录更新miss状态
+        po_observeMiss;             //通知预取器cache miss
+        k_popMandatoryQueue;        //弹出event
+    }
+
+    //TODO
+    transition({S,M}, Load) {
+        h_load_hit;
+        uu_profileDataHit;
+        pph_observePfHit;
+        k_popMandatoryQueue;
+    }
+
+    transition(I, ReadBlkIDVic, ISD) {
+        a_issueReadBlkIDVic;    //发送请求信息
+        issue_evict;            //将要淘汰清洁的数据放到缓冲中
+        oo_allocateSCacheBlock; //for read
+        i_uncache_allocateTBE;  //for read, released in ISD->S
+        uu_profileDataMiss;     //记录更新miss状态
+        po_observeMiss;         //通知预取器cache miss
+        k_popMandatoryQueue;    //弹出event
+    }
+
+    //TODO
+    transition({I,M,S}, ReadNCBlk) {
+        //oo_allocateSCacheBlock;
+        i_uncache_allocateTBE;
+        a_issueReadNCBlk;
+        k_popMandatoryQueue;  //弹出request from cpu
+    }
+
+    transition(I, Ifetch, ISD) {
+        pp_allocateSCacheBlock;
+        i_allocateTBE;
+        a_issueReadBlkI;
+        uu_profileInstMiss;
+        po_observeMiss;
+        k_popMandatoryQueue;
+    }
+
+    //TODO
+    transition({S,M}, Ifetch) {
+        h_ifetch_hit;
+        uu_profileInstHit;
+        pph_observePfHit;
+        k_popMandatoryQueue;
+    }
+
+    //local核心向LCPM发送 ReadBlkDVic(读产生的带脏淘汰取数请求)   I-->S  ====>   I-->ISD  ISD-->S
     transition(I, ReadBlkDVic, ISD) {
-        // TODO:返回的类型ReadBlk？？ //其他的输出信息有要求吗/有些数据在哪来的
-        a_issueReadBlk; 
+        a_issueReadBlkDVic; 
         // send evict to lcpm & deallocate evict Scache & allocate tbe for evict addr
         // 发送驱逐到lcpm&解除分配驱逐Scache&为驱逐地址分配tbe
         issue_evict; 
@@ -549,8 +1259,246 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         k_popMandatoryQueue;  //弹出event
     }
 
+    //TODO
+    transition(S, Store, SMA) {
+        b_issueShareToDirty;
+        uu_profileDataHit;
+        pph_observePfHit;
+        k_popMandatoryQueue;
+    }
 
+    //TODO
+    transition({I,M,S}, WriteNCBlk) {
+        i_uncache_allocateTBE;
+        b_issueWriteNCBlk;
+        k_popMandatoryQueue;
+    }
 
+    //TODO
+    transition({M,S}, EvictLocalBlk_R, IEA){
+        i_allocateTBE;
+        elb_issueEvictLocalBlk;
+        k_popMandatoryQueue;
+    }
 
+    //TODO
+    transition({I,M,S}, EvictECacheBlk_R){
+        ecb_issueEvictECacheBlk;
+        k_popMandatoryQueue;
+    }
 
+    //TODO
+    transition(IEA, ChangeToDirtyFail_Ack, I){
+        forward_eviction_to_cpu;
+        s_deallocateTBE;
+        ff_deallocateCacheBlock;
+        o_popIncomingResponseQueue;
+    }
+
+    //TODO
+    transition({I,M,S}, EvictGlobalBlk_R){
+        ecb_issueEvictGlobalBlk;
+        k_popMandatoryQueue;
+    }
+
+    //TODO
+    transition({I,M,S}, ChangeToDirtyFail_Ack){
+        forward_eviction_to_cpu;
+        o_popIncomingResponseQueue;
+    }
+  
+    //davi Transitions from Modified
+    //TODO
+    transition({I,M,S},GSN_NCGETRELEASE){
+        b_issueDataResponse;
+        s_deallocateTBE;
+        l_popRequestQueue;
+    }
+
+    //cache line in S state, will not issue evict, just delateit 
+    //TODO
+    transition(M, GSN_RELEASE, I){
+        fi_sendInvAck;
+        ff_deallocateCacheBlock;
+        s_deallocateTBE;
+        l_popRequestQueue;
+    }
+
+    //TODO
+    transition(M, GSN_GETRELEASE, I){
+        b_issueDataResponse;
+        ff_deallocateCacheBlock;
+        s_deallocateTBE;
+        l_popRequestQueue;
+    }
+
+    //TODO
+    transition({M,S},GSN_PUTINV, I){
+        fi_sendInvAck;
+        ff_deallocateCacheBlock;
+        l_popRequestQueue;
+    }
+
+    //TODO
+    transition({M,S},GSN_GETINV, I){
+        fi_sendGetInvAck;
+        ff_deallocateCacheBlock;
+        l_popRequestQueue;
+    }
+
+    //TODO
+    transition({I,M,S},WriteNCComplete_Ack){
+        nc_hhx_store_hit;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+    }
+
+    //TODO
+    transition(I, Store, IMD) {
+        oo_allocateSCacheBlock;
+        i_allocateTBE;
+        b_issueReadBlkMod;
+        uu_profileDataMiss;
+        po_observeMiss;
+        k_popMandatoryQueue;
+    }
+
+    //TODO
+    transition(I, ReadBlkModDVic, IMD){
+        b_issueReadBlkMod;
+        issue_evict;  //send evict to lcpm & deallocate evict Scache & allocate tbe for evict addr
+        oo_allocateSCacheBlock; //for write
+        i_uncache_allocateTBE; //for write
+        uu_profileDataMiss;  //记录更新miss状态
+        po_observeMiss;  //通知预取器cache miss
+        k_popMandatoryQueue;  //弹出event
+    }
+
+    // Transitions from Shared
+    //TODO
+    transition({S,M}, Ifetch) {
+        h_ifetch_hit;
+        uu_profileInstHit;
+        pph_observePfHit;
+        k_popMandatoryQueue;
+    }
+
+    //TODO
+    transition(M ,WriteComplete_Ack, I) {
+        forward_eviction_to_cpu;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+    }
+
+    //TODO
+    transition(S ,WriteComplete_Ack, I) {
+        forward_eviction_to_cpu;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+    }
+
+    //TODO
+    transition({S,M}, GSN_GETS, S) {
+        f_sendDataToL1;
+        l_popRequestQueue;
+    }
+
+    transition(ISD, ReadDataShare_Ack, S) {//数据流读返回
+        u_writeDataToCache;     //将数据写入缓存
+        hx_load_hit;            //通知序列器加载完成（缓存未命中）
+        s_deallocateTBE;        //取消分配TBE
+        o_popIncomingResponseQueue;     //弹出传入响应队列并配置此虚拟网络中的延迟
+        kd_wakeUpDependents;    //唤醒阻塞的
+    }
+
+    //TODO
+    transition(ISD, ReadData_Ack, S) {  //指令流读返回
+        u_writeDataToCache;
+        hx_load_hit;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    //uncached readback
+    //TODO
+    transition({I,S,M}, ReadNCData_Ack) {
+        nc_load_hit;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    //TODO
+    transition(SMA, ChangeToDirtySuccess_Ack, M) {
+        hhx_store_hit;
+        o_popIncomingResponseQueue;
+    }
+
+    //TODO
+    transition(IMD, ReadDataDirty_Ack, M) {
+        u_writeDataToCache;
+        hhx_store_hit;
+        s_deallocateTBE;
+        o_popIncomingResponseQueue;
+        kd_wakeUpDependents;
+    }
+    // store conditionals
+
+    //TODO
+    transition({I,S,M}, Failed_SC) {
+    // IS,IM,SM don't handle store conditionals
+        hhc_storec_fail;
+        k_popMandatoryQueue;
+    }
+
+    //TODO
+    transition({{IMD, ISD, SMA, PF_FA, PF_WA, IEA}, {ECFetchBlk_R, ECFetchBlkMod_R}) {
+        z_stallAndWaitOptionalQueue;
+    }
+
+    //TODO
+    transition({ECFetchBlk_R, ECFetchBlkMod_R}, {Load, Ifetch, Store, ReadBlkDVic,ReadBlkIDVic}) {
+        z_stallAndWaitMandatoryQueue;
+    }
+
+    //TODO
+    transition({S,M,ISD,IMD,IEA}, {ECFetchBlk_R, ECFetchBlkMod_R}) {
+        pq_popPrefetchQueue;
+    }
+
+    //TODO
+    transition(I, ECFetchBlk_R, PF_FA) {
+        uu_profileDataMiss;
+        ppm_observePfMiss;
+        pa_issueEctechBlk;
+        pq_popPrefetchQueue;
+    }
+
+    //TODO
+    transition(I, ECFetchBlkMod_R,PF_WA) {
+        uu_profileDataMiss;
+        ppm_observePfMiss;
+        pb_issueEctechBlkMod;
+        pq_popPrefetchQueue;
+    }
+
+    //TODO
+    transition(PF_FA, RequestComplete_Ack,I) {
+        mp_markPrefetched;
+        o_popIncomingResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    //TODO
+    transition(PF_WA, RequestComplete_Ack,I) {
+        mp_markPrefetched;
+        o_popIncomingResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    //TODO
+    transition(I, PF_Bad_Addr) {
+        pq_popPrefetchQueue;
+    } 
 }

@@ -4,7 +4,7 @@
 
 1.peek()函数:
     //用于提取消息队列开头的消息的函数。该函数假定队列为非空。
-    //第一个参数：消息队列   第二个参数：消息类型
+    //第一个参数：消息队列的接口   第二个参数：消息类型
     peek(mandatoryQueue_in, RubyRequest);
 
 2.out_port()函数:
@@ -49,21 +49,41 @@
     //信息，当前时间，请求等待时间
     enqueue(requestNetwork_out, CoherenceMsg, request_latency)
 
+5.结构:
+Entry
+TBE
+TBETable
+
+include "RubySlicc_Exports.sm";
+include "RubySlicc_Types.sm";
+include "RubySlicc_Util.sm";
+include "RubySlicc_ComponentMapping.sm";
+include "RubySlicc_Defines.sm";
+include "RubySlicc_MemControl.sm";
+
+ -----------
+|   CPU     |
+ ----------- 
+   |----|-------->  mandatoryQueue
+   |    |-------->  prefetchQueue   改名 optionalQueue_out   RubyRequest类型
+   v    v
+ -----------
+|   SCache  |
+ ----------- 
+   |    ^
+   |----|-------->  bufferToL1      改名 requestNetwork_out  CoherenceMsg类型
+   v    |-------->  bufferFromL1
+ -----------
+|   LCPM    |
+ ----------- 
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-问题：
-
+记录：
+ReadBlkDVic
+Load(ReadBlk)
+ReadBlkIDVic 
+(ReadBlkI)
 

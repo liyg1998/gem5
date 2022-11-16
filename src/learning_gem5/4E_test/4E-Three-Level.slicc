@@ -1,0 +1,4 @@
+protocol "MESI_Three_Level";
+include "4E-msg.sm";
+include "4E-Three-Level_scache.sm";
+include "RubySlicc_interfaces.slicc";

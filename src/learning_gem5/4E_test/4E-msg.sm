@@ -1,4 +1,4 @@
-//消息类型枚举
+//CoherenceClass消息类型枚举
 enumeration(CoherenceClass, desc="Types of messages") {
     //一次请求：指令流请求：
     ReadBlkI,           desc="取指令请求（可Cache存储器空间取值令且不引起数据Cache淘汰）";
@@ -56,9 +56,47 @@ enumeration(CoherenceClass, desc="Types of messages") {
     RequestComplete，   desc="请求处理完成响应，无数据传输。指一般共享可Cache请求的一致性处理完成，用于核心存储器栏栅计数器'-1'";
     IllegalAddr,        desc="地址非法响应，无数据传输，可Cache或不可Cache请求地址非法或越界，I/O空间请求访问不存在的寄存器";
     INTReqAck,          desc="指示发向核心的中断请求，无数据传输";          //因为和一次响应名字重了，先换个名字
+
+    Nop,                desc="不触发任何LCPM行为";
 }
 
-//在L0和L1控制器之间发送的消息的类。
+//Coherence请求消息类型枚举
+enumeration(CoherenceRequestType, desc="...") {
+    //GRQ-GAK
+    RdDataNC,           desc="数据不可cache读";
+    WrDataNC,           desc="数据不可cache写";
+    RdDataS,            desc="数据可cache读";
+    RdDataM,            desc="数据可cache写";
+    WbMtoI,             desc="数据淘汰";
+    InvXtoM,            desc="独占请求，清除其他die的Cache副本";
+    InvXtoI,            desc="全局刷新，清除系统所有Cache副本，脏数据回写主存";
+    
+    //GSN-GRP
+    PrbS,               desc="监听获得E/M状态数据，置无效Peer的副本，local期望拥有可写数据，独占";
+    PrbI,               desc="置无效Peer Cache的数据副本，脏数据回写主存，local不需要数据";
+}
+
+//Coherence回答消息类型枚举
+enumeration(CoherenceResponseType, desc="...") {
+    //GAK
+    AckCpl,             desc="Home收齐所有监听回答";
+    AckData,            desc="数据响应，无需状态TCache，不可cache读或IO读的响应";
+    AckSData,           desc="数据响应，TTag可装填为S状态";
+    AckEData,           desc="数据响应，TTag可装填为E状态";
+    AckMData,           desc="数据响应，TTag可装填为M状态";
+    AckFault,           desc="";
+
+    //GRP       
+    RspI,               desc="Peer副本已置无效";
+    RspIFwd,            desc="Peer副本已置无效，且已推送清洁数据给local";
+    RspIFwdWb,          desc="Peer副本已置无效，且已推送脏数据给local，脏数据回写主存";
+    RspIWb,             desc="Peer副本已置无效，未推送数据给local，脏数据回写主存";
+    RspS,               desc="Peer保留S副本，没有推送数据";
+    RspSFwd,            desc="Peer保留S副本，且已推送清洁数据给local";
+    RspSFwdWb,          desc="Peer保留S副本，且已推送脏数据给local，脏数据回写主存";
+}
+
+//在L0和L1控制器之间发送的消息的类。CoherenceMsg
 structure(CoherenceMsg, desc="...", interface="Message") {
     Addr addr,                    desc="Physical address of the cache block";       //缓存块的物理地址
     CoherenceClass Class,         desc="Type of message (GetS, GetX, PutX, etc)";   //消息类型
@@ -80,6 +118,62 @@ structure(CoherenceMsg, desc="...", interface="Message") {
 
     bool functionalWrite(Packet *pkt) {
         //不需要检查消息类型，因为协议应该从包含块的消息中读取数据
+        return testAndWrite(addr, DataBlk, pkt);
+    }
+}
+
+// RequestMsg
+structure(RequestMsg, desc="...", interface="Message") {
+    Addr addr,                      desc="Physical address for this request";
+    CoherenceRequestType Type,      desc="Type of request (GetS, GetX, PutX, etc)";
+    RubyAccessMode AccessMode,      desc="user/supervisor access type";
+    MachineID Requestor      ,      desc="What component request";
+    NetDest Destination,            desc="What components receive the request, includes MachineType and num";
+    MessageSizeType MessageSize,    desc="size category of the message";
+    DataBlock DataBlk,              desc="Data for the cache line (if PUTX)";
+    int Len;
+    bool Dirty, default="false",    desc="Dirty bit";
+    PrefetchBit Prefetch,           desc="Is this a prefetch request";
+
+    bool functionalRead(Packet *pkt) {
+        // Only PUTX messages contains the data block
+        if (Type == CoherenceRequestType:PUTX) {
+            return testAndRead(addr, DataBlk, pkt);
+        }
+        return false;
+    }
+
+    bool functionalWrite(Packet *pkt) {
+        // No check on message type required since the protocol should
+        // read data from those messages that contain the block
+        return testAndWrite(addr, DataBlk, pkt);
+    }
+}
+
+// ResponseMsg
+structure(ResponseMsg, desc="...", interface="Message") {
+    Addr addr,                      desc="Physical address for this request";
+    CoherenceResponseType Type,     desc="Type of response (Ack, Data, etc)";
+    MachineID Sender,               desc="What component sent the data";
+    NetDest Destination,            desc="Node to whom the data is sent";
+    DataBlock DataBlk,              desc="Data for the cache line";
+    bool Dirty, default="false",    desc="Dirty bit";
+    int AckCount, default="0",      desc="number of acks in this message";
+    MessageSizeType MessageSize,    desc="size category of the message";
+
+    bool functionalRead(Packet *pkt) {
+        // Valid data block is only present in message with following types
+        if (Type == CoherenceResponseType:DATA ||
+            Type == CoherenceResponseType:DATA_EXCLUSIVE ||
+            Type == CoherenceResponseType:MEMORY_DATA) {
+                return testAndRead(addr, DataBlk, pkt);
+        }
+        return false;
+    }
+
+    bool functionalWrite(Packet *pkt) {
+        // No check on message type required since the protocol should
+        // read data from those messages that contain the block
         return testAndWrite(addr, DataBlk, pkt);
     }
 }
