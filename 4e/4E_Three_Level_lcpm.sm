@@ -1048,13 +1048,30 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   o_popL2ResponseQueue;
   }
 
-  //todo
+  //todo: ReadBlkMod+Dvic 
   transition(I, Store_Miss, IM) {
     oo_allocateCacheBlock;
     i_allocateTBE;
     b_issueGETX;
     uu_profileMiss;
     k_popL0RequestQueue;
+  }
+
+  //todo: ShareToDirty
+  transition(I,{Store_Core_Hit,Store_Miss}, IM_F) {
+    oo_allocateCacheBlock;
+    i_allocateTBE;
+    //todo: send RdDataM
+    //b_issueGETX;
+    uu_profileMiss;
+    k_popL0RequestQueue;
+  }
+
+  transition(IM_F, AckMData, M){
+    //todo: write data to L3 cache;
+    //todo: send ReadDataDirty to core;
+    //todo: update Modifier;
+    //todo: popGCPMresponsequeue;
   }
 
   transition(I, Inv) {
@@ -1121,13 +1138,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   //todo: pop gcpm request queue;
   }
 
-  transition(M, PrbI, MI){
+  transition(M, PrbI, MI_F){
   //todo: send PutInv to modified core; 
   //todo: pop gcpm request queue;
   }
 
-  transition(MI, NoDataResponse_Ack, I){
-  //todo: send RspI to GCPM; 
+  transition(MI_F, NoDataResponse_Ack, I){
+  //todo: send RspIWb to GCPM; 
   //todo: pop core response queue;
   }
 
@@ -1226,6 +1243,10 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
    //popqueue;
   }
 
+  transition(EE, PrbI, I) {
+  //todo: send RspI to GCPM; 
+  //todo: pop gcpm request queue;
+  } 
   transition(EE, L1_Replacement, M_I){
     // silent E replacement??
     i_allocateTBE;
