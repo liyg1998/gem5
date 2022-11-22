@@ -405,7 +405,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
             }
         } else if (in_msg.Type == CoherenceRequestType:PrbS) {
           //we do not need to evict the data in core on sw, because when write to core, sharetodrity will give to lcpm;
-            if(getState(tbe, cache_entry, in_msg.addr) == State:IS){
+            if(getState(tbe, cache_entry, in_msg.addr) == State:IS || getState(tbe, cache_entry, in_msg.addr) == State:I || getState(tbe, cache_entry, in_msg.addr) == State:Inst_IS){
                 trigger(Event:RSPI, in_msg.addr, cache_entry, tbe);
             }else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:EE){
                 trigger(Event:RSPS, in_msg.addr, cache_entry, tbe);
@@ -440,7 +440,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         }  else if (in_msg.Class == CoherenceClass:INV_ACK) {
             trigger(Event:L0_Ack, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:DataResponse) {
-            trigger(Event:DataResponse, in_msg.addr, cache_entry, tbe);
+            trigger(Event:DataResponse_Ack, in_msg.addr, cache_entry, tbe);
+        }  else if (in_msg.Class == CoherenceClass:NoDataResponse) {
+            trigger(Event:NoDataResponse_Ack, in_msg.addr, cache_entry, tbe);
         }else {
             if (is_valid(cache_entry)) {
                 trigger(mandatory_request_type_to_event(in_msg.Class),
@@ -1012,12 +1014,12 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     k_popL0RequestQueue;
   }
 
-  transition(IS, RSPI){
+  transition({I,IS}, RSPI){
   //todo: issue RSPI to GCPM
   l_popL2RequestQueue;
   }
 
-  transition(Inst_IS, RSPI){
+  transition({I,Inst_IS}, RSPI){
   //todo: issue RSPI to GCPM
   l_popL2RequestQueue;
   }
@@ -1046,7 +1048,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   o_popL2ResponseQueue;
   }
 
-  transition(I, Store, IM) {
+  //todo
+  transition(I, Store_Miss, IM) {
     oo_allocateCacheBlock;
     i_allocateTBE;
     b_issueGETX;
@@ -1068,7 +1071,72 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     k_popL0RequestQueue;
   }
 
-  transition(SS, Load) {
+//share to dirty, core hit
+  transition({S,SS}, Store_Core_Hit, SMA) {
+    //todo: send putinv to shareders
+    //todo: poprequestqueue
+  }
+//readblkmod+dvic, core write miss
+  transition({S,SS}, Store_Hit_S, SSMA) {
+    //todo: send putinv to shareders
+    //todo: poprequestqueue
+  }
+
+  transition(SMA, NoDataResponse_Ack, SMA_F) {
+    //todo: send InvXtoM to GCPM
+    //todo: pop request to core queue;
+  }
+
+  transition(SSMA, NoDataResponse_Ack, SSMA_F){
+    //todo: send InvXtoM to GCPM
+    //todo: pop request to core queue;
+  }
+
+  transition(SMA_F, AckCpl, M) {
+    //todo: send ReadDataDirty 
+    //todo: updata modified core
+    //todo: send ChangeDirtySucess to request core
+    //todo: pop gcpm response queue;
+  }  
+
+  transition(SSMA_F, AckCpl, M) {
+    //todo: send ReadDataDirty 
+    //todo: updata modified core
+    //todo: send ReadDataDirty to request core
+    //todo: pop gcpm response queue;
+  }  
+
+  transition(SS, PrbI, I) {
+  //todo: send RspI to GCPM;
+  //todo: pop gcpm request queue;
+  }
+
+  transition(S, PrbI, SI) {
+  //todo: send PutInv to sharders;
+  //todo: pop gcpm request queque;
+  }
+
+  transaction(SI, NoDataResponse_Ack, I){
+  //todo: send RspI to GCPM;
+  //todo: pop gcpm request queue;
+  }
+
+  transition(M, PrbI, MI){
+  //todo: send PutInv to modified core; 
+  //todo: pop gcpm request queue;
+  }
+
+  transition(MI, NoDataResponse_Ack, I){
+  //todo: send RspI to GCPM; 
+  //todo: pop core response queue;
+  }
+
+  transition(MM, PrbI, I){
+  //todo: send RspI to GCPM; 
+  //todo: pop gcpm request queue;
+  }
+
+  transition(SS, Load){
     h_data_to_l0;
     nn_addSharer;
     //ss_recordGetSL0ID;
@@ -1152,9 +1220,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     k_popL0RequestQueue;
   }
 
-  transition(MD, ReadDataDirty_Ack, M){
+  transition(MD, DataResponse_Ack, M){
    //todo: update modifier core id;
-   //todo: send ReadDataDirty->ReadBlkMod+DVic;
+   //todo: send ReadDataDirty->ReadBlkMod+DVic to request core;
    //popqueue;
   }
 
