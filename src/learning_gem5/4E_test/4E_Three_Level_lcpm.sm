@@ -1,0 +1,1718 @@
+machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
+    : CacheMemory * cache;
+    int l2_select_num_bits;
+    Cycles l1_request_latency := 2;
+    Cycles l1_response_latency := 2;
+    Cycles to_l2_latency := 1;
+
+    // 此文件中 L0:表示核心  L1:表示LCPM  L2:表示GCPM
+    // Message Buffers between the L1 and the L0 Cache
+    // From the L1 cache to the L0 cache
+    // 发给核心的ACK
+    MessageBuffer * bufferToL0, network="To";
+
+    // From the L0 cache to the L1 cache
+    // 来自核心的RQ
+    MessageBuffer * bufferFromL0, network="From";
+
+    // Message queue from this L1 cache TO the network / L2
+    // 发给GCPM的请求
+    MessageBuffer * requestToL2, network="To", virtual_network="0", vnet_type="request";
+
+    // 发给GCPM的响应
+    MessageBuffer * responseToL2, network="To", virtual_network="1", vnet_type="response";
+    //暂时不看
+    MessageBuffer * unblockToL2, network="To", virtual_network="2", vnet_type="unblock";
+
+    // To this L1 cache FROM the network / L2
+    // 来自GCMP的请求
+    MessageBuffer * requestFromL2, network="From", virtual_network="2", vnet_type="request";
+    //来自GCPM的响应
+
+    MessageBuffer * responseFromL2, network="From", virtual_network="1", vnet_type="response";
+{
+    // STATES
+    state_declaration(State, desc="Cache states", default="L1Cache_State_I") {
+        // Base states
+        I,      AccessPermission:Invalid,       desc="L1 cache entry Idle";
+        S,      AccessPermission:Read_Only,     desc="Line is present in shared state in L1 and L0";
+        SS,     AccessPermission:Read_Only,     desc="Line is present in shared state in L1 but not L0";
+        EE,     AccessPermission:Read_Write,    desc="Line is present in exclusive state in L1 but not L0";
+        M,      AccessPermission:Maybe_Stale,   desc="Line is present in modified state in core and not present in LCPM(脏在核心)", format="!b";
+        MM,     AccessPermission:Read_Write,    desc="Line is present in modified state in LCPM but not present in core (脏在TCache)", format="!b";
+
+        // Transient States
+        IS,     AccessPermission:Busy,          desc="LCPM idle, issued GETS, have not seen response yet";
+        Inst_IS,AccessPermission:Busy,          desc="LCPM idle, issued GETS, have not seen response yet";
+        IM,     AccessPermission:Busy,          desc="L1 idle, issued GETX, have not seen response yet";
+        SM,     AccessPermission:Read_Only,     desc="L1 idle, issued GETX, have not seen response yet";
+        IS_I,   AccessPermission:Busy,          desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit";
+        M_I,    AccessPermission:Busy,          desc="L1 replacing, waiting for ACK (等待ACK)";
+        SINK_WB_ACK,    AccessPermission:Busy,  desc="This is to sink WB_Acks from L2";
+        //sw
+        IEE,    AccessPermission:Busy,          desc="LCPM idle, issued RSPI, have not seen response yet";
+        RSPS_S, AccessPermission:Busy,          desc="LCPM idle, issued RSPS, have not seen response yet";
+        RSPS_SS,    AccessPermission:Busy,      desc="LCPM idle, issued RSPS, have not seen response yet"; 
+        MM_EE,  AccessPermission:Busy,          desc="LCPM idle, issued RSPSWB, have not seen response yet";
+
+        // For all of the following states, invalidate
+        // message has been sent to L0 cache. The response
+        // from the L0 cache has not been seen yet.
+        S_IL0,  AccessPermission:Busy,          desc="Shared in L1, invalidation sent to L0, have not seen response yet";
+        E_IL0,  AccessPermission:Busy,          desc="Exclusive in L1, invalidation sent to L0, have not seen response yet";
+        M_IL0,  AccessPermission:Busy,          desc="Modified in L1, invalidation sent to L0, have not seen response yet";
+        MM_IL0, AccessPermission:Read_Write,    desc="Invalidation sent to L0, have not seen response yet";
+        MM_DL0, AccessPermission:Read_Write,    desc="Invalidation sent to L0, have not seen response yet";
+        SM_IL0, AccessPermission:Busy,          desc="Invalidation sent to L0, have not seen response yet";
+
+        //by liyg
+        MM_M,    AccessPermission:Busy,         desc="脏在核心到脏在TCache的过渡阶段";
+    }
+
+    // EVENTS
+    enumeration(Event, desc="Cache events") {
+        // Requests from the L0 cache
+        Load,           desc="Load request";
+        Ifetch,         desc="instru fetch request";
+        Store_Miss,     desc="Store miss";
+        Store_Hit_M,    desc="Store hit";
+        Store_Hit_MM,   desc="Store hit";
+        Store_Core_Hit, desc="ShareToDirty from L0";
+        WriteBack,      desc="Writeback request";
+
+        // Responses from the L0 Cache
+        // L0 cache received the invalidation message
+        // and has sent the data.
+        DataResponse,   desc="gets back from scache";
+        L0_DataAck,     desc="L0 received INV message";
+        Inv,            desc="Invalidate request from L2 bank";
+
+        // internally generated requests:
+        L0_Invalidate_Own,  desc="Invalidate line in L0, due to this cache's (L1) requirements";
+        L0_Invalidate_Else, desc="Invalidate line in L0, due to another cache's requirements";
+        L1_Replacement,     desc="Invalidate line in this cache (L1), due to another cache's requirements";
+
+        //Response to GCPM
+        RSPI,           desc="Response to GCPM, local has no data";
+        RSPS,           desc="Response to GCPM, local has S or E data":
+        RSPSWB,         desc="Response to GCPM, local has E data";
+
+        //Response from GCPM
+        ACKEDATA,       desc="";
+        ACKSDATA,       desc="";
+
+        // other requests
+        Fwd_GETX,       desc="GETX from other processor";
+        Fwd_GETS,       desc="GETS from other processor";
+
+        Data,           desc="Data for processor";
+        Data_Exclusive, desc="Data for processor";
+        DataS_fromL1,   desc="data for GETS request, need to unblock directory";
+        Data_all_Acks,  desc="Data for processor, all acks";
+
+        L0_Ack,         desc="Ack for processor";
+        Ack,            desc="Ack for processor";
+        Ack_all,        desc="Last ack for processor";
+        WB_Ack,         desc="Ack for replacement";
+
+        // hardware transactional memory
+        L0_DataCopy,    desc="Data Block from L0. Should remain in M state.";
+
+        // L0 cache received the invalidation message and has
+        // sent a NAK (because of htm abort) saying that the data
+        // in L1 is the latest value.
+        L0_DataNak,     desc="L0 received INV message, specifies its data is also stale";
+
+        //by liyg
+        ReadNCData_Ack,   desc="LCPM ReadNCBlk response to Core "
+        WriteComplete_ack,  desc="LCPM WriteNCBlk response to Core"
+    }
+
+    // CacheEntry
+    structure(Entry, desc="...", interface="AbstractCacheEntry" ) {
+        State CacheState,   desc="cache state";
+        NetDest Sharers,    desc="tracks the L1 shares on-chip";
+        MachineID Modifier, desc="Exclusive holder of block";
+        DataBlock DataBlk,  desc="data for the block";
+        bool Dirty, default="false",    desc="data is dirty";
+    }
+
+    // TBE fields
+    structure(TBE, desc="...") {
+        Addr addr,          desc="Physical address for this TBE";
+        State TBEState,     desc="Transient state";
+        DataBlock DataBlk,  desc="Buffer for the data block";
+        bool Dirty, default="false",    desc="data is dirty";
+        NetDest L0_GetS_IDs,            desc="Set of the internal processors that want the block in shared state";
+        MachineID L0_GetX_IDs,          desc="ID of the L1 cache to forward the block to once we get a response";
+        int pendingAcks, default="0",   desc="number of pending acks";
+    }
+
+    structure(TBETable, external="yes") {
+        TBE lookup(Addr);
+        void allocate(Addr);
+        void deallocate(Addr);
+        bool isPresent(Addr);
+    }
+
+    TBETable TBEs, template="<L1Cache_TBE>", constructor="m_number_of_TBEs";
+
+    int l2_select_low_bit, default="RubySystem::getBlockSizeBits()";
+
+    Tick clockEdge();
+    Cycles ticksToCycles(Tick t);
+    void set_cache_entry(AbstractCacheEntry a);
+    void unset_cache_entry();
+    void set_tbe(TBE a);
+    void unset_tbe();
+    void wakeUpBuffers(Addr a);
+    void wakeUpAllBuffers(Addr a);
+    void profileMsgDelay(int virtualNetworkType, Cycles c);
+
+    // inclusive cache returns L1 entries only
+    Entry getCacheEntry(Addr addr), return_by_pointer="yes" {
+        Entry cache_entry := static_cast(Entry, "pointer", cache[addr]);
+        return cache_entry;
+    }
+
+    State getState(TBE tbe, Entry cache_entry, Addr addr) {
+        if(is_valid(tbe)) {
+            return tbe.TBEState;
+        } else if (is_valid(cache_entry)) {
+            return cache_entry.CacheState;
+        }
+        return State:I;
+    }
+
+    void addSharer(Addr addr, MachineID requestor, Entry cache_entry) {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "machineID: %s, requestor: %s, address: %#x\n",
+            machineID, requestor, addr);
+        cache_entry.Sharers.add(requestor);
+    }
+
+    void putModifier(Addr addr, MachineID owner, Entry cache_entry) {
+        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "machineID: %s, m_owner: %s, address: %#x\n",
+            machineID, owner, addr);
+        cache_entry.Modifier := owner;
+    }
+
+    void setState(TBE tbe, Entry cache_entry, Addr addr, State state) {
+        // MUST CHANGE
+        if(is_valid(tbe)) {
+            tbe.TBEState := state;
+        }
+        if (is_valid(cache_entry)) {
+            cache_entry.CacheState := state;
+        }
+    }   
+
+    AccessPermission getAccessPermission(Addr addr) {
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            DPRINTF(RubySlicc, "%s\n", L1Cache_State_to_permission(tbe.TBEState));
+            return L1Cache_State_to_permission(tbe.TBEState);
+        }
+
+        Entry cache_entry := getCacheEntry(addr);
+        if(is_valid(cache_entry)) {
+            DPRINTF(RubySlicc, "%s\n", L1Cache_State_to_permission(cache_entry.CacheState));
+            return L1Cache_State_to_permission(cache_entry.CacheState);
+        }
+
+        DPRINTF(RubySlicc, "%s\n", AccessPermission:NotPresent);
+        return AccessPermission:NotPresent;
+    }
+
+    void functionalRead(Addr addr, Packet *pkt) {
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            testAndRead(addr, tbe.DataBlk, pkt);
+        } else {
+            testAndRead(addr, getCacheEntry(addr).DataBlk, pkt);
+        }
+    }
+
+    int functionalWrite(Addr addr, Packet *pkt) {
+        int num_functional_writes := 0;
+        TBE tbe := TBEs[addr];
+        if(is_valid(tbe)) {
+            num_functional_writes := num_functional_writes + testAndWrite(addr, tbe.DataBlk, pkt);
+            return num_functional_writes;
+        }
+
+        num_functional_writes := num_functional_writes + testAndWrite(addr, getCacheEntry(addr).DataBlk, pkt);
+        return num_functional_writes;
+    }
+
+    void setAccessPermission(Entry cache_entry, Addr addr, State state) {
+        if (is_valid(cache_entry)) {
+            cache_entry.changePermission(L1Cache_State_to_permission(state));
+        }
+    }
+
+    Event mandatory_request_type_to_event(CoherenceClass type) {
+        if ((type == CoherenceClass:ReadBlkI) || (type == CoherenceClass::ReadBlk)) {
+            return Event:Load;
+        }else if((type == CoherenceClass:ReadBlkIDVic) || (type == CoherenceClass::ReadBlkDVic)){
+            return Event:Ifetch;
+        } else if ((type == CoherenceClass:ReadBlkMod) || (type == CoherenceClass:ReadBlkModDVic)) {
+            if(getState(tbe, cache_entry, in_msg.addr) == State:EE || getState(tbe, cache_entry, in_msg.addr) == State:MM)
+                return Event:Store_Hit_MM;
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:M) {
+                return Event:Store_Hit_M;
+            }else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:SS){
+                return Event:Store_Hit_S;
+            }else
+                return Event:Store_Miss;
+        } else if ((type == CoherenceClass:ShareToDirty)){
+            return Event:Store_Core_Hit;
+        } else if (type == CoherenceClass:PUTX) {
+            return Event:WriteBack;
+        } else {
+            error("Invalid RequestType");
+        }
+    }
+
+    int getPendingAcks(TBE tbe) {
+        return tbe.pendingAcks;
+    }
+
+    bool inL0Cache(State state) {
+        if (state == State:S || state == State:EE ||
+            state == State:M || state == State:SMM) {
+            return true;
+        }
+        return false;
+    }
+
+    out_port(requestNetwork_out, RequestMsg, requestToL2);
+    out_port(responseNetwork_out, ResponseMsg, responseToL2);
+    out_port(unblockNetwork_out, ResponseMsg, unblockToL2);
+    out_port(bufferToL0_out, CoherenceMsg, bufferToL0);
+
+    // Response From the network(GCPM) to this LCPM
+    in_port(responseNetwork_in, ResponseMsg, responseFromL2, rank = 2) {
+        if (responseNetwork_in.isReady(clockEdge())) {
+            peek(responseNetwork_in, ResponseMsg) {
+                assert(in_msg.Destination.isElement(machineID));
+                Entry cache_entry := getCacheEntry(in_msg.addr);
+                TBE tbe := TBEs[in_msg.addr];
+                if(in_msg.Type == CoherenceResponseType:DATA_EXCLUSIVE) {
+                    trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
+                }else if(in_msg.Type == CoherenceResponseType:AckEData){
+                    trigger(Event:ACKEDATA, in_msg.addr, cache_entry, tbe);
+                }else if(in_msg.Type == CoherenceResponseType:AckEData){
+                    trigger(Event:ACKSDATA, in_msg.addr, cache_entry, tbe);
+                }else if(in_msg.Type == CoherenceResponseType:tododavid) {
+                    if ((getState(tbe, cache_entry, in_msg.addr) == State:IS || 
+                            getState(tbe, cache_entry, in_msg.addr) == State:IS_I) &&
+                            machineIDToMachineType(in_msg.Sender) == MachineType:L1Cache) {
+                        trigger(Event:DataS_fromL1, in_msg.addr, cache_entry, tbe);
+                    } else if ( getState(tbe, cache_entry, in_msg.addr) == State:I )  {
+                        //TODO
+                    } else if ( (getPendingAcks(tbe) - in_msg.AckCount) == 0 ) {
+                        trigger(Event:Data_all_Acks, in_msg.addr, cache_entry, tbe);
+                    } else {
+                        trigger(Event:Data, in_msg.addr, cache_entry, tbe);
+                    }
+                } else if (in_msg.Type == CoherenceResponseType:ACK) {
+                    if ( (getPendingAcks(tbe) - in_msg.AckCount) == 0 ) {
+                        trigger(Event:Ack_all, in_msg.addr, cache_entry, tbe);
+                    } else {
+                        trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
+                    }
+                } else if (in_msg.Type == CoherenceResponseType:WB_ACK) {
+                    trigger(Event:WB_Ack, in_msg.addr, cache_entry, tbe);
+                } else {
+                    error("Invalid L1 response type");
+                }
+            }
+        }
+    }
+
+    // Request to this LCPM from the GCPM
+    in_port(requestNetwork_in, RequestMsg, requestFromL2, rank = 1) {
+        if(requestNetwork_in.isReady(clockEdge())) {
+            peek(requestNetwork_in, RequestMsg) {
+                assert(in_msg.Destination.isElement(machineID));
+                Entry cache_entry := getCacheEntry(in_msg.addr);
+                TBE tbe := TBEs[in_msg.addr];
+
+                if (in_msg.Type == CoherenceRequestType:INV) {
+                    if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
+                        trigger(Event:L0_Invalidate_Else, in_msg.addr, cache_entry, tbe);
+                    }  else {
+                        trigger(Event:Inv, in_msg.addr, cache_entry, tbe);
+                    }
+                } else if (in_msg.Type == CoherenceRequestType:GETX ||
+                            in_msg.Type == CoherenceRequestType:UPGRADE) {
+                    if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
+                        trigger(Event:L0_Invalidate_Else, in_msg.addr, cache_entry, tbe);
+                    } else {
+                        trigger(Event:Fwd_GETX, in_msg.addr, cache_entry, tbe);
+                    }
+                } else if (in_msg.Type == CoherenceRequestType:PrbS) {
+                    //we do not need to evict the data in core on sw, because when write to core, sharetodrity will give to lcpm;
+                    if(getState(tbe, cache_entry, in_msg.addr) == State:IS || getState(tbe, cache_entry, in_msg.addr) == State:I || getState(tbe, cache_entry, in_msg.addr) == State:Inst_IS){
+                        trigger(Event:RSPI, in_msg.addr, cache_entry, tbe);
+                    } else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:EE){
+                        trigger(Event:RSPS, in_msg.addr, cache_entry, tbe);
+                    } else if(getState(tbe, cache_entry, in_msg.addr) == State:MM) {
+                        trigger(Event:RSPSWB, in_msg.addr, cache_entry, tbe);
+                    } else if(getState(tbe, cache_entry, in_msg.addr) == State:M) {
+                        if(getState(tbe, cache_entry, in_msg.addr) == State:MM_G)
+                           trigger(Event:RSPSWB, in_msg.addr, cache_entry, tbe);
+                    } else {
+                        //TODO
+                    }
+                } else {
+                    error("Invalid forwarded request type");
+                }
+            }
+        }
+    }
+
+    // Response/Request to this LCPM from the L0 cache.
+    // 从L0缓存对此LCPM的响应/请求。
+    in_port(messageBufferFromL0_in, CoherenceMsg, bufferFromL0, rank = 0) {
+        if (messageBufferFromL0_in.isReady(clockEdge())) {
+            peek(messageBufferFromL0_in, CoherenceMsg) {
+                Entry cache_entry := getCacheEntry(in_msg.addr);
+                TBE tbe := TBEs[in_msg.addr];
+
+                if(in_msg.Class == CoherenceClass:INV_DATA) {
+                    trigger(Event:L0_DataAck, in_msg.addr, cache_entry, tbe);
+                } else if (in_msg.Class == CoherenceClass:NAK) {
+                    trigger(Event:L0_DataNak, in_msg.addr, cache_entry, tbe);
+                } else if (in_msg.Class == CoherenceClass:PUTX_COPY) {
+                    trigger(Event:L0_DataCopy, in_msg.addr, cache_entry, tbe);
+                } else if (in_msg.Class == CoherenceClass:INV_ACK) {
+                    trigger(Event:L0_Ack, in_msg.addr, cache_entry, tbe);
+                } else if (in_msg.Class == CoherenceClass:DataResponse) {
+                    trigger(Event:DataResponse_Ack, in_msg.addr, cache_entry, tbe);
+                } else if (in_msg.Class == CoherenceClass:NoDataResponse) {
+                    trigger(Event:NoDataResponse_Ack, in_msg.addr, cache_entry, tbe);
+                }  else if (in_msg.Class == CoherenceClass:ReadNCBlk) {
+                    trigger(Event:ReadNCData_Ack, in_msg.addr, cache_entry, tbe);、
+                }  else if (in_msg.Class == CoherenceClass:WriteNCBlk) {
+                    trigger(Event:WriteComplete_Ack, in_msg.addr, cache_entry, tbe);
+                } else {
+                    if (is_valid(cache_entry)) {
+                        trigger(mandatory_request_type_to_event(in_msg.Class), in_msg.addr, cache_entry, tbe);
+                    } else {
+                        if (cache.cacheAvail(in_msg.addr)) {
+                            // L1 does't have the line, but we have space for it
+                            // in the L1 let's see if the L2 has it
+                            trigger(mandatory_request_type_to_event(in_msg.Class), in_msg.addr, cache_entry, tbe);
+                        } else {
+                            // No room in the L1, so we need to make room in the L1
+                            Addr victim := cache.cacheProbe(in_msg.addr);
+                            Entry victim_entry := getCacheEntry(victim);
+                            TBE victim_tbe := TBEs[victim];
+
+                            if (is_valid(victim_entry) && inL0Cache(victim_entry.CacheState)) {
+                                trigger(Event:L0_Invalidate_Own, victim, victim_entry, victim_tbe);
+                            }  else {
+                                trigger(Event:L1_Replacement, victim, victim_entry, victim_tbe);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    action(ll_clearSharers, "\l", desc="Remove all L0 sharers from list") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            cache_entry.Sharers.clear();
+        }
+    }
+
+    action(nn_addSharer, "\n", desc="Add L0 sharer to list") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            addSharer(address, in_msg.Sender, cache_entry);
+            APPEND_TRANSITION_COMMENT( cache_entry.Sharers );
+        }
+    }
+
+    action(nn_putModifier, "\nm", desc="Put LCPM entry to M") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            putModifier(address, machineID, cache_entry);
+            APPEND_TRANSITION_COMMENT( cache_entry.Modefier);
+        }
+    }
+
+    action(ss_recordGetSL0ID, "\s", desc="Record L0 GetS for load response") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(tbe));
+            tbe.L0_GetS_IDs.add(in_msg.Sender);
+        }
+    }
+
+    action(ss_recordGetXL0ID, "\s", desc="Record L0 GETX(M) for load response") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            cache_entry.Modifier := in_msg.Sender;
+        }
+    }
+
+    action(a_issueRdDataS, "a", desc="Issue RdDataS") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:RdDataS;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issueRdDataNC, "a", desc="Issue RdDataNC") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:RdDataNC;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    action(a_issueGETI, "a", desc="Issue GetI") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:GetI;
+                out_msg.Sender := machineID;
+                out_msg.Dest := cache_entry.Modifier;//when get DataResponse, turn this cache_entry.Modifier to localmachineid,and add orig Modefier to shaders
+                out_msg.MessageSize := MessageSizeType:Control;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issueGETS, "a", desc="Issue GetS 取数置共享") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:GetS;
+                out_msg.Sender := machineID;
+                out_msg.Dest := cache_entry.Modifier;//判断脏在那个核心就去那个地方
+                out_msg.MessageSize := MessageSizeType:Control;
+            }
+        }
+    }
+
+    //by liyg  
+    //TODO
+    action(a_issueGETR, "a", desc="Issue GetR 取数并释放缓冲") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:GetR;
+                out_msg.Sender := machineID;
+                out_msg.Dest := cache_entry.Modifier;//判断脏在那个核心就去那个地方
+                out_msg.MessageSize := MessageSizeType:Control;
+            }
+        }
+    }
+
+    action(b_issueGETX, "b", desc="Issue GETX") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+          enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:GETX;
+            out_msg.Requestor := machineID;
+            DPRINTF(RubySlicc, "%s\n", machineID);
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                              l2_select_low_bit, l2_select_num_bits, clusterID));
+            DPRINTF(RubySlicc, "address: %#x, destination: %s\n",
+                    address, out_msg.Destination);
+            out_msg.MessageSize := MessageSizeType:Control;
+            out_msg.AccessMode := in_msg.AccessMode;
+            out_msg.Prefetch := in_msg.Prefetch;
+          }
+        }
+    }
+
+    action(c_issueUPGRADE, "c", desc="Issue GETX") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:UPGRADE;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache, 
+                    l2_select_low_bit, l2_select_num_bits, clusterID));
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    action(d_sendDataToRequestor, "d", desc="send data to requestor") {
+        peek(requestNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Type := CoherenceResponseType:DATA;
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.Dirty := cache_entry.Dirty;
+                out_msg.Sender := machineID;
+                out_msg.Destination.add(in_msg.Requestor);
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+    }
+
+    action(d2_sendDataToL2, "d2", desc="send data to the L2 cache because of M downgrade") {
+        enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:DATA;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+    }
+
+    action(dt_sendDataToRequestor_fromTBE, "dt", desc="send data to requestor") {
+        peek(requestNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+                assert(is_valid(tbe));
+                out_msg.addr := address;
+                out_msg.Type := CoherenceResponseType:DATA;
+                out_msg.DataBlk := tbe.DataBlk;
+                out_msg.Dirty := tbe.Dirty;
+                out_msg.Sender := machineID;
+                out_msg.Destination.add(in_msg.Requestor);
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+    }
+
+    action(d2t_sendDataToL2_fromTBE, "d2t", desc="send data to the L2 cache") {
+        enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+            assert(is_valid(tbe));
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:DATA;
+            out_msg.DataBlk := tbe.DataBlk;
+            out_msg.Dirty := tbe.Dirty;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+    }
+
+    action(e_sendAckToRequestor, "e", desc="send invalidate ack to requestor (could be L2 or L1)") {
+        peek(requestNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceResponseType:ACK;
+                out_msg.Sender := machineID;
+                out_msg.Destination.add(in_msg.Requestor);
+                out_msg.MessageSize := MessageSizeType:Response_Control;
+            }
+        }
+    }
+
+    action(f_sendDataToL2, "f", desc="send data to the L2 cache") {
+        enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:DATA;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Writeback_Data;
+        }
+    }
+
+    action(ft_sendDataToL2_fromTBE, "ft", desc="send data to the L2 cache") {
+        enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+            assert(is_valid(tbe));
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:DATA;
+            out_msg.DataBlk := tbe.DataBlk;
+            out_msg.Dirty := tbe.Dirty;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Writeback_Data;
+        }
+    }
+
+    action(fi_sendInvAck, "fi", desc="send data to the L2 cache") {
+        peek(requestNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceResponseType:ACK;
+                out_msg.Sender := machineID;
+                out_msg.Destination.add(in_msg.Requestor);
+                out_msg.MessageSize := MessageSizeType:Response_Control;
+                out_msg.AckCount := 1;
+            }
+        }
+    }
+
+    action(forward_eviction_to_L0_own, "\cc", desc="sends (own) eviction information to the processor") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:INV_OWN;
+            out_msg.Sender := machineID;
+            out_msg.Dest := createMachineID(MachineType:L0Cache, version);
+            out_msg.MessageSize := MessageSizeType:Control;
+        }
+    }
+
+    action(forward_eviction_to_L0_else, "\cce", desc="sends (else) eviction information to the processor") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:INV_ELSE;
+            out_msg.Sender := machineID;
+            out_msg.Dest := createMachineID(MachineType:L0Cache, version);
+            out_msg.MessageSize := MessageSizeType:Control;
+        }
+    }
+
+    action(g_issuePUTX, "g", desc="send data to the L2 cache") {
+        enqueue(requestNetwork_out, RequestMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:PUTX;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.Requestor:= machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            if (cache_entry.Dirty) {
+                out_msg.MessageSize := MessageSizeType:Writeback_Data;
+                out_msg.DataBlk := cache_entry.DataBlk;
+            } else {
+                out_msg.MessageSize := MessageSizeType:Writeback_Control;
+            }
+        }
+    }
+
+    action(j_sendUnblock, "j", desc="send unblock to the L2 cache") {
+        enqueue(unblockNetwork_out, ResponseMsg, to_l2_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:UNBLOCK;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Response_Control;
+            DPRINTF(RubySlicc, "%#x\n", address);
+        }
+    }
+
+    action(jj_sendExclusiveUnblock, "\j", desc="send unblock to the L2 cache") {
+        enqueue(unblockNetwork_out, ResponseMsg, to_l2_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:EXCLUSIVE_UNBLOCK;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(mapAddressToRange(address, MachineType:L2Cache,
+                l2_select_low_bit, l2_select_num_bits, clusterID));
+            out_msg.MessageSize := MessageSizeType:Response_Control;
+            DPRINTF(RubySlicc, "%#x\n", address);
+        }
+    }
+
+    action(h_data_to_l0, "h", desc="If not prefetch, send data to the L0 cache.") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadDataShare;
+                out_msg.Sender := machineID;
+                out_msg.Dest := in_msg.Sender;
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+        cache.setMRU(address);
+    }
+
+    //by liyg
+    action(h_data1_to_l0, "h", desc="回复DataNCBlk的响应") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadNCData_Ack;
+                out_msg.Sender := machineID;
+                out_msg.Dest := in_msg.Sender;
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+        cache.setMRU(address);
+    }
+
+    action(h_instruction_to_l0, "h", desc="If not prefetch, send data to the L0 cache.") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadData;
+                out_msg.Sender := machineID;
+                out_msg.Dest := in_msg.Sender;
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+        cache.setMRU(address);
+    }
+
+
+    action(hh_sdata_to_l0, "\h", desc="If not prefetch, notify sequencer that store completed.") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            if(im_msg.Class == CoherenceClass:ReadBlkI)
+            out_msg.Class := CoherenceClass:ReadDataShare;
+            out_msg.Sender := machineID;
+            out_msg.Dest := tbe.L1_GetS_IDs;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+    action(hh_insdata_to_l0, "\hin", desc="If not prefetch, notify sequencer that store completed.") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:ReadData;
+            out_msg.Sender := machineID;
+            out_msg.Dest := tbe.L1_GetS_IDs;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+    action(hh_xdata_to_l0, "\h", desc="If not prefetch, notify sequencer that store completed.") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            if(im_msg.Class == CoherenceClass:ReadBlkI)
+            out_msg.Class := CoherenceClass:ReadDataShare;
+            out_msg.Sender := machineID;
+            out_msg.Dest := cache_entry.Modefier;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+    //by liyg
+    action(hh_data_to_l0, "\h", desc="回复DataNCBlk的响应") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:ReadNCData_Ack;
+            out_msg.Sender := machineID;
+            out_msg.Dest := cache_entry.Modefier;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+    action(hh_inxdata_to_l0, "\hin", desc="If not prefetch, notify sequencer that store completed.") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:ReadData;
+            out_msg.Sender := machineID;
+            out_msg.Dest := cache_entry.Modefier
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+
+    action(h_stale_data_to_l0, "hs", desc="If not prefetch, send data to the L0 cache.") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:STALE_DATA;
+            out_msg.Sender := machineID;
+            out_msg.Dest := createMachineID(MachineType:L0Cache, version);
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+    }
+
+    action(i_allocateTBE, "i", desc="Allocate TBE (number of invalidates=0)") {
+        check_allocate(TBEs);
+        assert(is_valid(cache_entry));
+        TBEs.allocate(address);
+        set_tbe(TBEs[address]);
+        tbe.Dirty := cache_entry.Dirty;
+        tbe.DataBlk := cache_entry.DataBlk;
+        tbe.L0_GetS_IDs.clear();
+        tbe.pendingAcks := cache_entry.Sharers.count();
+    }
+
+    action(k_popL0RequestQueue, "k", desc="Pop mandatory queue.") {
+        messageBufferFromL0_in.dequeue(clockEdge());
+    }
+
+    action(l_popL2RequestQueue, "l", desc="Pop incoming request queue and profile the delay within this virtual network") {
+        Tick delay := requestNetwork_in.dequeue(clockEdge());
+        profileMsgDelay(2, ticksToCycles(delay));
+    }
+
+    action(o_popL2ResponseQueue, "o", desc="Pop Incoming Response queue and profile the delay within this virtual network") {
+        Tick delay := responseNetwork_in.dequeue(clockEdge());
+        profileMsgDelay(1, ticksToCycles(delay));
+    }
+
+    action(s_deallocateTBE, "s", desc="Deallocate TBE") {
+        TBEs.deallocate(address);
+        unset_tbe();
+    }
+
+    action(u_writeDataFromL0Request, "ureql0", desc="Write data to cache") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            if (in_msg.Dirty) {
+                cache_entry.DataBlk := in_msg.DataBlk;
+                cache_entry.Dirty := in_msg.Dirty;
+            }
+        }
+    }
+
+    action(u_writeDataFromL2Response, "uresl2", desc="Write data to cache") {
+        peek(responseNetwork_in, ResponseMsg) {
+            assert(is_valid(cache_entry));
+            cache_entry.DataBlk := in_msg.DataBlk;
+            cache_entry.Dirty := in_msg.Dirty;
+        }
+    }
+
+    action(u_writeDataFromL0Response, "uresl0", desc="Write data to cache") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            assert(is_valid(cache_entry));
+            if (in_msg.Dirty) {
+                cache_entry.DataBlk := in_msg.DataBlk;
+                cache_entry.Dirty := in_msg.Dirty;
+            }
+        }
+    }
+
+    action(q_updateAckCount, "q", desc="Update ack count") {
+        peek(responseNetwork_in, ResponseMsg) {
+            assert(is_valid(tbe));
+            tbe.pendingAcks := tbe.pendingAcks - in_msg.AckCount;
+            APPEND_TRANSITION_COMMENT(in_msg.AckCount);
+            APPEND_TRANSITION_COMMENT(" p: ");
+            APPEND_TRANSITION_COMMENT(tbe.pendingAcks);
+        }
+    }
+
+    action(ff_deallocateCacheBlock, "\f", desc="Deallocate L1 cache block.") {
+        if (cache.isTagPresent(address)) {
+            cache.deallocate(address);
+        }
+        unset_cache_entry();
+    }
+
+    action(oo_allocateCacheBlock, "\o", desc="Set cache tag equal to tag of block B.") {
+        if (is_invalid(cache_entry)) {
+            set_cache_entry(cache.allocate(address, new Entry));
+        }
+    }
+
+    action(z0_stallAndWaitL0Queue, "\z0", desc="recycle L0 request queue") {
+        stall_and_wait(messageBufferFromL0_in, address);
+    }
+
+    action(z2_stallAndWaitL2Queue, "\z2", desc="recycle L2 request queue") {
+        stall_and_wait(requestNetwork_in, address);
+    }
+
+    action(kd_wakeUpDependents, "kd", desc="wake-up dependents") {
+        wakeUpAllBuffers(address);
+    }
+
+    action(uu_profileMiss, "\um", desc="Profile the demand miss") {
+        cache.profileDemandMiss();
+    }
+
+    action(uu_profileHit, "\uh", desc="Profile the demand hit") {
+        cache.profileDemandHit();
+    }
+
+
+  //*****************************************************
+  // TRANSITIONS
+  //*****************************************************
+
+  // Transitions for Load/Store/Replacement/WriteBack from transient states
+    transition({IS, IM, IS_I, M_I, SM, SINK_WB_ACK, S_IL0, M_IL0, E_IL0, MM_IL0},
+                {Load, Store, L1_Replacement}) {
+        z0_stallAndWaitL0Queue;
+    }
+
+    transition(I, Load, IS) {
+        oo_allocateCacheBlock;
+        ll_clearSharers;
+        nn_addSharer;
+        i_allocateTBE;
+        ss_recordGetSL0ID;
+        a_issueRdDataS;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    transition(I, Ifetch, Inst_IS) {
+        oo_allocateCacheBlock;
+        ll_clearSharers;
+        nn_addSharer;
+        i_allocateTBE;
+        ss_recordGetSL0ID;
+        a_issueRdDataS;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    transition({I,IS}, RSPI){
+        //todo: issue RSPI to GCPM
+        l_popL2RequestQueue;
+    }
+
+    transition({I,Inst_IS}, RSPI){
+        //todo: issue RSPI to GCPM
+        l_popL2RequestQueue;
+    }
+
+    transition(IS, ACKEDATA,EE){
+        //todo: put data into local cache line
+        //todo: response readdatashare
+        o_popL2ResponseQueue;
+    }
+
+    transition(IS, ACKSDATA, S){
+        //todo: put data into local cache line
+        //todo: response readdatashare
+        o_popL2ResponseQueue;
+    }
+    
+    transition(Inst_IS, ACKEDATA, EE){
+        //todo: put data into local cache line
+        //todo: response readdata
+        o_popL2ResponseQueue;
+    }
+
+    transition(Inst_IS, ACKSDATA, SS){
+        //todo: put data into local cache line
+        //todo: response readdata
+        o_popL2ResponseQueue;
+    }
+
+    //todo: ReadBlkMod+Dvic 
+    transition(I, Store_Miss, IM) {
+        oo_allocateCacheBlock;
+        i_allocateTBE;
+        b_issueGETX;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //todo: ShareToDirty
+    transition(I,{Store_Core_Hit,Store_Miss}, IM_F) {
+        oo_allocateCacheBlock;
+        i_allocateTBE;
+        //todo: send RdDataM
+        //b_issueGETX;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    transition(IM_F, AckMData, M){
+        //todo: write data to L3 cache;
+        //todo: send ReadDataDirty to core;
+        //todo: update Modifier;
+        //todo: popGCPMresponsequeue;
+    }
+
+    transition(I, Inv) {
+        fi_sendInvAck;
+        l_popL2RequestQueue;
+    }
+
+    // Transitions from Shared
+    transition(S, Load) {
+        h_data_to_l0;
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    //share to dirty, core hit
+    transition({S,SS}, Store_Core_Hit, SMA) {
+        //todo: send putinv to shareders
+        //todo: poprequestqueue
+    }
+
+    //readblkmod+dvic, core write miss
+    transition({S,SS}, Store_Hit_S, SSMA) {
+        //todo: send putinv to shareders
+        //todo: poprequestqueue
+    }
+
+    transition(SMA, NoDataResponse_Ack, SMA_F) {
+        //todo: send InvXtoM to GCPM
+        //todo: pop request to core queue;
+    }
+
+    transition(SSMA, NoDataResponse_Ack, SSMA_F){
+        //todo: send InvXtoM to GCPM
+        //todo: pop request to core queue;
+    }
+
+    transition(SMA_F, AckCpl, M) {
+        //todo: send ReadDataDirty 
+        //todo: updata modified core
+        //todo: send ChangeDirtySucess to request core
+        //todo: pop gcpm response queue;
+    }  
+
+    transition(SSMA_F, AckCpl, M) {
+        //todo: send ReadDataDirty 
+        //todo: updata modified core
+        //todo: send ReadDataDirty to request core
+        //todo: pop gcpm response queue;
+    }  
+
+    transition(SS, PrbI, I) {
+        //todo: send RspI to GCPM;
+        //todo: pop gcpm request queue;
+    }
+
+    transition(S, PrbI, SI) {
+        //todo: send PutInv to sharders;
+        //todo: pop gcpm request queque;
+    }
+
+    transaction(SI, NoDataResponse_Ack, I){
+        //todo: send RspI to GCPM;
+        //todo: pop gcpm request queue;
+    }
+
+    transition(M, PrbI, MI_F){
+        //todo: send PutInv to modified core; 
+        //todo: pop gcpm request queue;
+    }
+
+    transition(MI_F, NoDataResponse_Ack, I){
+        //todo: send RspIWb to GCPM; 
+        //todo: pop core response queue;
+    }
+
+    transition(MM, PrbI, I){
+        //todo: send RspI to GCPM; 
+        //todo: pop gcpm request queue;
+    }
+
+    transition(SS, Load){
+        h_data_to_l0;
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(S, Ifetch) {
+        h_instruction_to_l0;
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(SS, Ifetch) {
+        h_instruction_to_l0;
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(S, RSPS) {
+        //todo: send RspS to GCPM
+        //todo: popL2requestqueue;
+    }
+
+    transition(SS, RSPS) {
+        //todo: send RspS to GCPM
+        //todo: popL2requestqueue;
+    }
+
+    transition({S,SS}, Store, SM) {
+        i_allocateTBE;
+        c_issueUPGRADE;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    transition(SS, L1_Replacement, I) {
+        ff_deallocateCacheBlock;
+    }
+
+    transition(S, L0_Invalidate_Own, S_IL0) {
+        forward_eviction_to_L0_own;
+    }
+
+    transition(S, L0_Invalidate_Else, S_IL0) {
+        forward_eviction_to_L0_else;
+    }
+
+    transition(SS, Inv, I) {
+        fi_sendInvAck;
+        ff_deallocateCacheBlock;
+        l_popL2RequestQueue;
+    }
+
+    // Transitions from Exclusive
+    transition({EE,MM}, Store_Hit_MM, MA) {
+        //todo: send PutInv to shader cores;
+        k_popL0RequestQueue;
+    }
+
+    //if M in core, other core can't be S, so core will not issue sharetodirty(issue readblkmod+DVic);
+    transition(MM, Store_Core_Hit, MA){
+        //todo: set modifer core id;
+        //todo: send send PutInv to shader cores;
+        k_popL0RequestQueue;
+    }
+
+    //Resonse from putInv
+    transition(MA, NoDataResponse_Ack, M){
+        //todo: set modifier core id;
+        //todo: send ChangetoDirtySuccess; 
+        //pop queue
+    }
+
+    transition(M, Store_Hit_M, MD){
+        //todo: send GetInv to Modifier core;
+        k_popL0RequestQueue;
+    }
+
+    transition(MD, DataResponse_Ack, M){
+        //todo: update modifier core id;
+        //todo: send ReadDataDirty->ReadBlkMod+DVic to request core;
+        //popqueue;
+    }
+
+    transition(EE, PrbI, I) {
+        //todo: send RspI to GCPM; 
+        //todo: pop gcpm request queue;
+    } 
+
+    transition(EE, L1_Replacement, M_I){
+        // silent E replacement??
+        i_allocateTBE;
+        g_issuePUTX;   // send data, but hold in case forwarded request
+        ff_deallocateCacheBlock;
+    }
+
+    transition(EE, Inv, I) {
+        // don't send data
+        fi_sendInvAck;
+        ff_deallocateCacheBlock;
+        l_popL2RequestQueue;
+    }
+
+    transition(EE, Fwd_GETX, I) {
+        d_sendDataToRequestor;
+        ff_deallocateCacheBlock;
+        l_popL2RequestQueue;
+    }
+
+    transition(EE, Fwd_GETS, SS) {
+        d_sendDataToRequestor;
+        d2_sendDataToL2;
+        l_popL2RequestQueue;
+    }
+
+    transition(E, L0_Invalidate_Own, E_IL0) {
+        forward_eviction_to_L0_own;
+    }
+
+    transition(E, L0_Invalidate_Else, E_IL0) {
+        forward_eviction_to_L0_else;
+    }
+
+    transaction(MM, RSPSWB){
+        //todo : issue RSPSWB to GCPM sender (with data)
+        //todo : pop gcpm requestqueue
+    }
+
+    transaction(M, RSPSWB, MMD){
+        //todo : issue GETS to M core
+    }
+
+    transaction(MMD, DataResponse, MM_G){
+        //todo: get data from DataResponse, put into Tcache and set dirty
+    }
+
+    transaction(MM_G, RSPSWB, MM){
+        //todo : issue RSPSWB with data to GCPM sender
+        //todo : pop gcpm requestqueue
+    }
+
+    // Transitions from Modified
+    transition(MM, L1_Replacement, M_I) {
+        i_allocateTBE;
+        g_issuePUTX;   // send data, but hold in case forwarded request
+        ff_deallocateCacheBlock;
+    }
+
+    transition({M,E}, WriteBack, MM) {
+        u_writeDataFromL0Request;
+        k_popL0RequestQueue;
+    }
+
+    transition(M_I, WB_Ack, I) {
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        ff_deallocateCacheBlock;
+        kd_wakeUpDependents;
+    }
+
+    transition(MM, Inv, I) {
+        f_sendDataToL2;
+        ff_deallocateCacheBlock;
+        l_popL2RequestQueue;
+    }
+
+    transition(M_I, Inv, SINK_WB_ACK) {
+        ft_sendDataToL2_fromTBE;
+        l_popL2RequestQueue;
+    }
+
+    transition(MM, Fwd_GETX, I) {
+        d_sendDataToRequestor;
+        ff_deallocateCacheBlock;
+        l_popL2RequestQueue;
+    }
+
+    transition(MM, Fwd_GETS, SS) {
+        d_sendDataToRequestor;
+        d2_sendDataToL2;
+        l_popL2RequestQueue;
+    }
+
+    transition(M, L0_Invalidate_Own, M_IL0) {
+        forward_eviction_to_L0_own;
+    }
+
+    transition(M, L0_Invalidate_Else, M_IL0) {
+        forward_eviction_to_L0_else;
+    }
+
+    transition(M_I, Fwd_GETX, SINK_WB_ACK) {
+        dt_sendDataToRequestor_fromTBE;
+        l_popL2RequestQueue;
+    }
+
+    transition(M_I, Fwd_GETS, SINK_WB_ACK) {
+        dt_sendDataToRequestor_fromTBE;
+        d2t_sendDataToL2_fromTBE;
+        l_popL2RequestQueue;
+    }
+
+    // Transitions from IS
+    transition({IS,IS_I}, Inv, IS_I) {
+        fi_sendInvAck;
+        l_popL2RequestQueue;
+    }
+
+    transition(IS, Data_all_Acks, S) {
+        u_writeDataFromL2Response;
+        h_data_to_l0;
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(IS_I, Data_all_Acks, I) {
+        u_writeDataFromL2Response;
+        h_stale_data_to_l0;
+        s_deallocateTBE;
+        ff_deallocateCacheBlock;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(IS, DataS_fromL1, S) {
+        u_writeDataFromL2Response;
+        j_sendUnblock;
+        h_data_to_l0;
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(IS_I, DataS_fromL1, I) {
+        u_writeDataFromL2Response;
+        j_sendUnblock;
+        h_stale_data_to_l0;
+        s_deallocateTBE;
+        ff_deallocateCacheBlock;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    // directory is blocked when sending exclusive data
+    transition({IS,IS_I}, Data_Exclusive, E) {
+        u_writeDataFromL2Response;
+        hh_xdata_to_l0;
+        jj_sendExclusiveUnblock;
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    // Transitions from IM
+    transition(IM, Inv, IM) {
+        fi_sendInvAck;
+        l_popL2RequestQueue;
+    }
+
+    transition(IM, Data, SM) {
+        u_writeDataFromL2Response;
+        q_updateAckCount;
+        o_popL2ResponseQueue;
+    }
+
+    transition(IM, Data_all_Acks, M) {
+        u_writeDataFromL2Response;
+        hh_xdata_to_l0;
+        jj_sendExclusiveUnblock;
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition({SM, IM}, Ack) {
+        q_updateAckCount;
+        o_popL2ResponseQueue;
+    }
+
+    transition(SM, Ack_all, M) {
+        jj_sendExclusiveUnblock;
+        hh_xdata_to_l0;
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(SM, {Inv,L0_Invalidate_Else}, SM_IL0) {
+        forward_eviction_to_L0_else;
+    }
+
+    transition(SINK_WB_ACK, Inv){
+        fi_sendInvAck;
+        l_popL2RequestQueue;
+    }
+
+    transition(SINK_WB_ACK, WB_Ack, I){
+        s_deallocateTBE;
+        o_popL2ResponseQueue;
+        ff_deallocateCacheBlock;
+        kd_wakeUpDependents;
+    }
+
+    transition({M_IL0, E_IL0}, WriteBack, MM_IL0) {
+        u_writeDataFromL0Request;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition({M_IL0, E_IL0}, L0_DataAck, MM) {
+        u_writeDataFromL0Response;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition({M_IL0, MM_IL0}, L0_Ack, MM) {
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(E_IL0, L0_Ack, EE) {
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(S_IL0, L0_Ack, SS) {
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(SM_IL0, L0_Ack, IM) {
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition({S_IL0, M_IL0, E_IL0, SM_IL0, SM}, L0_Invalidate_Own) {
+        z0_stallAndWaitL0Queue;
+    }
+
+    transition({S_IL0, M_IL0, E_IL0, SM_IL0}, L0_Invalidate_Else) {
+        z2_stallAndWaitL2Queue;
+    }
+
+    transition({S_IL0, M_IL0, E_IL0, MM_IL0}, {Inv, Fwd_GETX, Fwd_GETS}) {
+        z2_stallAndWaitL2Queue;
+    }
+
+    // hardware transactional memory
+
+    // If a transaction has aborted, the L0 could re-request
+    // data which is in E or EE state in L1.
+    transition(EE, Load, EE) {
+        h_data_to_l0
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(EE, Ifetch, EE) {
+        h_instruction_to_l0;
+        nn_addSharer;
+        // ss_recordGetSL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    // If a transaction has aborted, the L0 could re-request
+    // data which is in M or MM state in L1. Instruct will not present in M mode
+    transition(MM, Load, MM) {
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        h_data_to_l0;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(MM, Ifetch, MM) {
+        nn_addSharer;
+        //ss_recordGetSL0ID;
+        h_instruction_to_l0;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(M, Load, MM_DL0) { //wait for DataResponse
+        //issue gets to M core
+        a_issueGETI;
+        //nn_addSharer;
+        ss_recordGetXL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(M, Ifetch, MM_IL0) { //wait for DataResponse
+        //todo:issue gets to M core
+        a_issueGETI;
+        //nn_addSharer;
+        ss_recordGetXL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    transition(MM_IL0, DataResponse, MM) {
+        //getdata and put into l3-cache
+        u_writeDataFromL0Response;
+        //put cache_entry.Modefier,  cache_entry.Modefier := MachineID, 
+        nn_putModifier;
+        //and gets destnation core to shaders( dest core recv gets and turn into s)
+        //nn_addSharer;
+        //send data back to the requestor cpu scache
+        hh_inxdata_to_l0;
+        //Pop incoming queue
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(MM_DL0, DataResponse, MM) {
+        //getdata and put into l3-cache
+        u_writeDataFromL0Response;
+        //put cache_entry.Modefier,  cache_entry.Modefier := MachineID, 
+        nn_putModifier;
+        //and gets destnation core to shaders( dest core recv gets and turn into s)
+        //nn_addSharer;
+        //send data back to the requestor cpu scache
+        hh_xdata_to_l0;
+        //Pop incoming queue
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    // If a transaction has aborted, the L0 could re-request
+    // data which is in M state in L1.
+    transition({E,M}, Store, M) {
+        hh_xdata_to_l0;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    // A transaction may have tried to modify a cache block in M state with
+    // non-speculative (pre-transactional) data. This needs to be copied
+    // to the L1 before any further modifications occur at the L0.
+    transition({M,E}, L0_DataCopy, M) {
+        u_writeDataFromL0Request;
+        k_popL0RequestQueue;
+    }
+
+    transition({M_IL0, E_IL0}, L0_DataCopy, M_IL0) {
+        u_writeDataFromL0Request;
+        k_popL0RequestQueue;
+    }
+
+    // A NAK from the L0 means that the L0 invalidated its
+    // modified line (due to an abort) so it is therefore necessary
+    // to use the L1's correct version instead
+    transition({M_IL0, E_IL0}, L0_DataNak, MM) {
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    transition(I, L1_Replacement) {
+        ff_deallocateCacheBlock;
+    }
+
+    //by liyg
+    //接收ReadNCBlk请求：脏在核心 并向其他核心发送取数置共享
+    transition(M , ReadNCData_Ack, MM_M){
+        a_issueGETS;            //发出取数置共享
+        ss_recordGetXL0ID;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    //接收回答(取数置共享请求的回答)   并返回一次请求的响应
+    transition(MM_M , GetS, MM){
+        u_writeDataFromL0Response;  //获取数据并放入LCPM缓冲
+        nn_putModifier;
+        hh_data_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //接收ReadNCBlk请求：脏在TCache 
+    transition({MM,S,E} , ReadNCData_Ack){
+        nn_addSharer;
+        h_data1_to_l0;
+        uu_profileHit;
+        k_popL0RequestQueue;
+    }
+
+    //接收ReadNCBlk请求：不命中TCache  向Home GCPM发送RdDataNC请求
+    transition(I , ReadNCData_Ack) {
+        //暂时参考可cache的不命中Tcache
+        oo_allocateCacheBlock;
+        ll_clearSharers;
+        nn_addSharer;
+        i_allocateTBE;
+        ss_recordGetSL0ID;    //可能需要修改
+        a_issueRdDataNC;        
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收回答(RdDataNC请求的回答)   并返回一次请求的响应
+    transition(I, AckData){
+        //TODO
+        
+    }
+
+
+    //接收WriteNCBlk请求：整Cache行写，命中脏独占或清洁独占
+    transition({M,E} , WriteComplete_Ack, I) {
+        a_issueGETR;
+
+
+
+    }
+
+    //接收WriteNCBlk请求：整Cache行写，命中清洁共享或者不命中
+    transition(S , WriteComplete_Ack, SI) {
+        a_issueGETR;    //取数并释放缓冲
+                        //置无效GETI 参考liyg1
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，
+    transition(SI , WriteComplete_Ack, SII) {  //后续改
+        u_writeDataFromL0Response;
+        //NODataResponse
+
+    }
+
+    //等待置无效的响应，并发送全局请求
+    transition(SII , ACK_ALL, SIII) {  //后续改
+        //NODataResponse
+
+        //向GCPM发送全局请求WrDataNC
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(SIII , AckCpl,I) {  //后续改
+        //接收响应
+        //向核心返回WriteComplete
+        
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+
+
+    //liyg1
+    /* action(f_sendInvToSharers, "f", desc="invalidate sharers for L2 replacement") {
+    enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Type := CoherenceRequestType:INV;
+      out_msg.Requestor := machineID;
+      out_msg.Destination := cache_entry.Sharers;
+      out_msg.MessageSize := MessageSizeType:Request_Control;
+    }
+  } */
+
+}

@@ -31,13 +31,6 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         // The processor has read and write permissions on this entry.处理器对此条目具有读写权限。
         M, AccessPermission:Read_Write, desc="Modified（脏独占）";
 
-        // /***********Transient States状态转换**************/
-        // //I-->I   ack    Evict* 的请求（EvictLoaclBlk,EvictGlobalBlk,EvictECacheBlk）
-        // IIA, AccessPermission:Busy, desc="Issued Evict* request, wait for ChangeToDirtyFail Ack";
- 
-        // //I-->I   data   响应无数据？??
-        // IID, AccessPermission:Busy, desc="Get putinvalid, wait for NoDataResponse";
-
         // The cache controller has requested that this entry be fetched in
         // shared state so that the processor can read it. 缓存控制器已请求以共享状态获取此条目，以便处理器可以读取它。
         //I-->S   data
@@ -45,8 +38,6 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
 
         // // The cache controller has requested that this entry be fetched in
         // // modify state so that the processor can read/write it. //高速缓存控制器已请求在脏状态下获取该条目，以便处理器可以读取/写入该条目。
-        // //I-->M   ack
-        // IMA, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
 
         //I-->M    data
         IMD, AccessPermission:Busy, desc="Issued davi, have not seen response yet";
@@ -60,27 +51,6 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         //S-->M     ack
         SMA, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
         
-        // //S-->M     data
-        // SMD, AccessPermission:Read_Only, desc="Issued GETX, have not seen response yet";
- 
-        // //S-->I     data
-        // SID, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
-        // 
-        // //S-->I     data    ack
-        // SIDA, AccessPermission:Busy, desc="Received putinvalid, have not seen response yet";
- 
-        // //S-->S
-        // SS, AccessPermission:Read_Only, desc="Issued EVICT*, have not seen response yet";
- 
-        // //M-->S     data
-        // MSD, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
-         
-        // //M-->I     data
-        // MID, AccessPermission:Busy, desc="Received GETS, have not seen response yet";
- 
-        // //M-->M     ack
-        // MMA, AccessPermission:Busy, desc="Issued EvictGlobalBlk/EvictECacheBlk, have not seen response yet";
-
         // Transient states in which block is being prefetched正在预取块的瞬态状态
         PF_FA, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
         PF_WA, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
@@ -440,7 +410,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                 //判断响应类型是否为ReadData
                 if(in_msg.Class == CoherenceClass:ReadData) { 
                     if(isCached(in_msg.addr)) { //是否Cache
-                        //FetchBlkI请求  应该
+                        //FetchBlkI 请求  应该
                         trigger(Event:ReadData_Ack, in_msg.addr, cache_entry, tbe);
                     } else {
                         //IORead请求/ReadNCBlk请求   应该
@@ -711,7 +681,6 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
-    //TODO
     action(a_issueReadBlkI, "a", desc="Issue ReadBlkI") {
         peek(mandatoryQueue_in, RubyRequest) {
             enqueue(requestNetwork_out, CoherenceMsg, request_latency) {
@@ -1084,8 +1053,8 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         wakeUpAllBuffers(address);
     }
 
-    //TODO
-    action(uu_profileInstMiss, "\ui", desc="Profile the demand miss") {
+    action(uu_profileInstMiss, "\ui", desc="Profile the demand miss(配置需求未命中)") {
+        //这是声明配置需求未命中
         Icache.profileDemandMiss();
     }
 
@@ -1223,14 +1192,13 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
 
     //TODO
     transition({I,M,S}, ReadNCBlk) {
-        //oo_allocateSCacheBlock;
         i_uncache_allocateTBE;
         a_issueReadNCBlk;
         k_popMandatoryQueue;  //弹出request from cpu
     }
 
     transition(I, Ifetch, ISD) {
-        pp_allocateSCacheBlock;
+        oo_allocateSCacheBlock;
         i_allocateTBE;
         a_issueReadBlkI;
         uu_profileInstMiss;
@@ -1411,7 +1379,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         kd_wakeUpDependents;    //唤醒阻塞的
     }
 
-    //TODO
+    //TODO 和上面的操作是一模一样的啊
     transition(ISD, ReadData_Ack, S) {  //指令流读返回
         u_writeDataToCache;
         hx_load_hit;

@@ -1,6 +1,13 @@
 说明文档：
 四种状态：无效(I Invalid)，清洁独占(E Exclusive)，脏独占(M Modified)，清洁共享(S Shared)
 
+I
+E
+M
+S
+命中:地址找
+未命中(miss)
+
 
 1.peek()函数:
     //用于提取消息队列开头的消息的函数。该函数假定队列为非空。
@@ -85,5 +92,6 @@ include "RubySlicc_MemControl.sm";
 ReadBlkDVic
 Load(ReadBlk)
 ReadBlkIDVic 
-(ReadBlkI)
+Ifetch(ReadBlkI)
+ReadBlkModDVic
 
