@@ -58,7 +58,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         // For all of the following states, invalidate
         // message has been sent to L0 cache. The response
         // from the L0 cache has not been seen yet.
-        S_IL0,  AccessPermission:Busy,          desc="Shared in L1, invalidation sent to L0, have not seen response yet";
+        S_IL0,  AccessPermission:Busy,          desc="Shared in L1, invalidation sent to L0, have not seen response yet  在L1中共享，失效发送到L0，尚未看到响应";
         E_IL0,  AccessPermission:Busy,          desc="Exclusive in L1, invalidation sent to L0, have not seen response yet";
         M_IL0,  AccessPermission:Busy,          desc="Modified in L1, invalidation sent to L0, have not seen response yet";
         MM_IL0, AccessPermission:Read_Write,    desc="Invalidation sent to L0, have not seen response yet";
@@ -67,6 +67,11 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
         //by liyg
         MM_M,    AccessPermission:Busy,         desc="脏在核心到脏在TCache的过渡阶段";
+        S_IL1,   AccessPermission:Busy,         desc="LCPM清洁共享到无效的过渡阶段";
+        I_IL1,   AccessPermission:Busy,         desc="LCPM无效到无效的过渡阶段";
+        MME_IL1, AccessPermission:Busy,         desc="LCPM脏在TCache/清洁独占到无效的过渡阶段";
+        M_IL1,   AccessPermission:Busy,         desc="LCPM脏在核心到无效的过渡阶段";
+        SS_IL1,  AccessPermission:Busy,         desc="非整行Cache写，LCPM清洁共享到无效的过渡阶段";
     }
 
     // EVENTS
@@ -124,8 +129,12 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         L0_DataNak,     desc="L0 received INV message, specifies its data is also stale";
 
         //by liyg
-        ReadNCData_Ack,   desc="LCPM ReadNCBlk response to Core "
-        WriteComplete_ack,  desc="LCPM WriteNCBlk response to Core"
+        ReadNCData_Ack,     desc="LCPM ReadNCBlk response to Core ";
+        WriteComplete_Ack,  desc="LCPM WriteNCBlk response to Core";
+        GetS_req,           desc="LCPM GetS request to Core";
+        AckData,            desc="GCPM RdDataNC response to LCPM";
+        NoDataResponse_Ack, desc="Core 置无效 response to LCPM";
+        AckCpl,             desc="GCPM WrDataNC response to LCPM";
     }
 
     // CacheEntry
@@ -293,6 +302,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     out_port(bufferToL0_out, CoherenceMsg, bufferToL0);
 
     // Response From the network(GCPM) to this LCPM
+    // GCPM回给LCPM的响应
     in_port(responseNetwork_in, ResponseMsg, responseFromL2, rank = 2) {
         if (responseNetwork_in.isReady(clockEdge())) {
             peek(responseNetwork_in, ResponseMsg) {
@@ -303,8 +313,10 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
                     trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
                 }else if(in_msg.Type == CoherenceResponseType:AckEData){
                     trigger(Event:ACKEDATA, in_msg.addr, cache_entry, tbe);
-                }else if(in_msg.Type == CoherenceResponseType:AckEData){
-                    trigger(Event:ACKSDATA, in_msg.addr, cache_entry, tbe);
+                }else if(in_msg.Type == CoherenceResponseType:AckData){   //by liyg
+                    trigger(Event:AckData, in_msg.addr, cache_entry, tbe);
+                }else if(in_msg.Type == CoherenceResponseType:AckCpl){   //by liyg
+                    trigger(Event:AckData, in_msg.addr, cache_entry, tbe);
                 }else if(in_msg.Type == CoherenceResponseType:tododavid) {
                     if ((getState(tbe, cache_entry, in_msg.addr) == State:IS || 
                             getState(tbe, cache_entry, in_msg.addr) == State:IS_I) &&
@@ -333,6 +345,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
 
     // Request to this LCPM from the GCPM
+    // LCPM发给GCPM的请求
     in_port(requestNetwork_in, RequestMsg, requestFromL2, rank = 1) {
         if(requestNetwork_in.isReady(clockEdge())) {
             peek(requestNetwork_in, RequestMsg) {
@@ -492,6 +505,38 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         }
     }
 
+    //by liyg
+    action(a_issueWrDataNC, "a", desc="Issue WrDataNC") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:WrDataNC;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issueWbMtoI, "a", desc="Issue WbMtoI") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:WbMtoI;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
     action(a_issueGETI, "a", desc="Issue GetI") {
         peek(messageBufferFromL0_in, CoherenceMsg) {
             enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
@@ -527,6 +572,24 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
                 out_msg.Sender := machineID;
                 out_msg.Dest := cache_entry.Modifier;//判断脏在那个核心就去那个地方
                 out_msg.MessageSize := MessageSizeType:Control;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issuePUTI, "a", desc="Issue PUTI 向owner为核心的发送置无效") {
+        peek(messageBufferFromL0_in, CoherenceMsg) {
+            enqueue(bufferToL0_out, RequestMsg, to_l1_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:PutI;
+                out_msg.Requestor := machineID;
+                out_msg.Destination := cache_entry.Sharers;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+                out_msg.AckCount := 0 - cache_entry.Sharers.count();
+                if (cache_entry.Sharers.isElement(in_msg.Requestor)) {  // 如果local核心也有副本，则AckCount需要+1
+                    out_msg.AckCount := out_msg.AckCount + 1;
+                }
             }
         }
     }
@@ -835,6 +898,21 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
             assert(is_valid(cache_entry));
             out_msg.addr := address;
             out_msg.Class := CoherenceClass:ReadNCData_Ack;
+            out_msg.Sender := machineID;
+            out_msg.Dest := cache_entry.Modefier;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+
+    //by liyg
+    action(issue_WriteComplete, "\h", desc="回复WriteNCBlk的响应WriteComplete") {
+        enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:WriteComplete;
             out_msg.Sender := machineID;
             out_msg.Dest := cache_entry.Modefier;
             out_msg.DataBlk := cache_entry.DataBlk;
@@ -1627,7 +1705,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
 
     //接收回答(取数置共享请求的回答)   并返回一次请求的响应
-    transition(MM_M , GetS, MM){
+    transition(MM_M , GetS_req, MM){
         u_writeDataFromL0Response;  //获取数据并放入LCPM缓冲
         nn_putModifier;
         hh_data_to_l0;
@@ -1664,55 +1742,201 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
 
     //接收WriteNCBlk请求：整Cache行写，命中脏独占或清洁独占
-    transition({M,E} , WriteComplete_Ack, I) {
-        a_issueGETR;
-
-
-
-    }
-
-    //接收WriteNCBlk请求：整Cache行写，命中清洁共享或者不命中
-    transition(S , WriteComplete_Ack, SI) {
-        a_issueGETR;    //取数并释放缓冲
-                        //置无效GETI 参考liyg1
+    transition({M,E,MM} , WriteComplete_Ack, ME_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲
+        a_issuePUTI;    //owner核心置无效请求
         k_popL0RequestQueue;    //弹出核心请求
     }
 
     //等待取数并释放缓冲的响应，
-    transition(SI , WriteComplete_Ack, SII) {  //后续改
+    transition(ME_IL1, DataResponse) { 
         u_writeDataFromL0Response;
-        //NODataResponse
-
+        hh_inxdata_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
     }
 
     //等待置无效的响应，并发送全局请求
-    transition(SII , ACK_ALL, SIII) {  //后续改
-        //NODataResponse
-
-        //向GCPM发送全局请求WrDataNC
+    transition(ME_IL1, NoDataResponse_Ack) { 
+        //TODO 接收响应
+        i_allocateTBE;
+        a_issueWbMtoI;    //向GCPM发送全局请求WbMtoI
+        uu_profileMiss;
+        k_popL0RequestQueue;
     }
 
     //接收AckCpl，并向核心返回响应
-    transition(SIII , AckCpl,I) {  //后续改
-        //接收响应
+    transition(ME_IL1, AckCpl ,I) {
+        //TODO 接收响应
         //向核心返回WriteComplete
-        
+        issue_WriteComplete;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收WriteNCBlk请求：整Cache行写，命中清洁共享
+    transition(S, WriteComplete_Ack, S_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲
+        a_issuePUTI;    //owner核心置无效请求
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，
+    transition(S_IL1, DataResponse) { 
+        u_writeDataFromL0Response;
+        hh_inxdata_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //等待置无效的响应，并发送全局请求
+    transition(S_IL1, NoDataResponse_Ack) { 
+        //TODO 接收响应
+        i_allocateTBE;
+        a_issueWrDataNC;    //向GCPM发送全局请求WrDataNC
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(S_IL1, AckCpl ,I) {
+        //TODO 接收响应
+        //向核心返回WriteComplete
+        issue_WriteComplete;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收WriteNCBlk请求：整Cache行写，不命中
+    transition(I, WriteComplete_Ack, I_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲
+        a_issuePUTI;    //owner核心置无效请求
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，并发送全局请求
+    transition(I_IL1, DataResponse) { 
+        u_writeDataFromL0Response;
+        hh_inxdata_to_l0;
+        i_allocateTBE;
+        a_issueWrDataNC;    //向GCPM发送全局请求WrDataNC
+        uu_profileMiss;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(I_IL1, AckCpl ,I) {
+        //TODO 接收响应
+        //向核心返回WriteComplete
+        issue_WriteComplete;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收WriteNCBlk请求：非整Cache行写，命中清洁独占或脏在Tcache
+    transition({MM,E} , WriteComplete_Ack, MME_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲   (这个的取数应该有所不一样，)
+        a_issuePUTI;    //owner核心置无效请求
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，
+    transition(MME_IL1, DataResponse) { 
+        u_writeDataFromL0Response;
+        hh_inxdata_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //等待置无效的响应，并发送全局请求
+    transition(MME_IL1, NoDataResponse_Ack) { 
+        //TODO 接收响应
+        i_allocateTBE;
+        a_issueWrDataNC;    //向GCPM发送全局请求WrDataNC
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(MME_IL1, AckCpl ,I) {
+        //TODO 接收响应
+        //向核心返回WriteComplete
+        issue_WriteComplete;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收WriteNCBlk请求：非整Cache行写，命中清洁独占或脏在Tcache
+    transition(M, WriteComplete_Ack, M_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲   (这个的取数应该有所不一样，)
+        a_issuePUTI;    //owner核心置无效请求
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，
+    transition(M_IL1, DataResponse) { 
+        u_writeDataFromL0Response;
+        hh_inxdata_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //等待置无效的响应，并发送全局请求
+    transition(M_IL1, NoDataResponse_Ack) { 
+        //TODO 接收响应
+        i_allocateTBE;
+        a_issueWbMtoI;    //向GCPM发送全局请求WbMtoI
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(M_IL1, AckCpl ,I) {
+        //TODO 接收响应
+        //向核心返回WriteComplete
+        issue_WriteComplete;
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收WriteNCBlk请求：不整Cache行写，命中清洁共享
+    transition(S, WriteComplete_Ack, SS_IL1) {
+        a_issueGETR;    //Local核心取数并释放缓冲
+        a_issuePUTI;    //owner核心置无效请求
+        k_popL0RequestQueue;    //弹出核心请求
+    }
+
+    //等待取数并释放缓冲的响应，
+    transition(SS_IL1, DataResponse) { 
+        u_writeDataFromL0Response;
+        hh_inxdata_to_l0;
+        k_popL0RequestQueue;
+        kd_wakeUpDependents;
+    }
+
+    //等待置无效的响应，并发送全局请求
+    transition(SS_IL1, NoDataResponse_Ack) { 
+        //TODO 接收响应
+        i_allocateTBE;
+        a_issueWrDataNC;    //向GCPM发送全局请求WrDataNC
+        uu_profileMiss;
+        k_popL0RequestQueue;
+    }
+
+    //接收AckCpl，并向核心返回响应
+    transition(SS_IL1, AckCpl ,I) {
+        //TODO 接收响应
+        //向核心返回WriteComplete
+        issue_WriteComplete;
         uu_profileMiss;
         k_popL0RequestQueue;
     }
 
 
 
-    //liyg1
-    /* action(f_sendInvToSharers, "f", desc="invalidate sharers for L2 replacement") {
-    enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
-      assert(is_valid(cache_entry));
-      out_msg.addr := address;
-      out_msg.Type := CoherenceRequestType:INV;
-      out_msg.Requestor := machineID;
-      out_msg.Destination := cache_entry.Sharers;
-      out_msg.MessageSize := MessageSizeType:Request_Control;
-    }
-  } */
+
+
+    
 
 }
