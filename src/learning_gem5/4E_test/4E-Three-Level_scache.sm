@@ -8,10 +8,10 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         RubyPrefetcher * prefetcher;
         bool enable_prefetch := "False";
 
-        //从该节点的L0缓存到网络
+        //核心发给LCPM的请求(RQ1)或回答(RSP)
         MessageBuffer * bufferToL1, network="To";
 
-        //从网络到该节点的L0缓存
+        //LCPM返回给核心的响应(ACK)或二次请求(RQ2)
         MessageBuffer * bufferFromL1, network="From";
 
         //此控制器和处理器之间的消息队列
@@ -57,7 +57,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
     }
 
     enumeration(Event, desc="Cache events") {
-        // Events from core  来自核心的事件
+        // Events from core  来自核心的事件(请求)
         Load,                       desc="Load request from the home processor来自主处理器的加载请求";  //就是 ReadBlk
         ReadBlkIDVic,               desc="带脏淘汰的取值令请求";
         ReadBlkDVic,                desc="带脏淘汰的取数请求";
@@ -74,7 +74,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         GSN_NCGETRELEASE,           desc="nocache addr Get Data and release gsn from LCPM";
         GSN_RELEASE,                desc="Release gsn from LCPM";
 
-        // internal generated request 内部生成的请求
+        // internal generated request 内部生成的请求 
         WrVictimBlk_R,              desc="Scache cache line Replacement", format="!r";
 
         //Replacement 刷新
@@ -116,7 +116,6 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         bool Dirty, default="false",   desc="data is dirty";
         bool isPrefetched, default="false", desc="Set if this block was prefetched";
     }
-
 
     // TBE fields 字段
     // 悬挂请求信息的
@@ -170,22 +169,21 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         return Scache_entry;
     }
 
-    //TODO
+    //获取状态
     State getState(TBE tbe, Entry cache_entry, Addr addr) {
         //判断Scache和ICache当前的地址是不是有一个不存在？
         assert((Scache.isTagPresent(addr) && Icache.isTagPresent(addr)) == false);
-        if(is_valid(tbe)) {
+        if(is_valid(tbe)) {                     //tbe 有效
             return tbe.TBEState;
-        } else if (is_valid(cache_entry)) {
+        } else if (is_valid(cache_entry)) {     //Cache缓存条目有效
             return cache_entry.CacheState;
         }
         return State:I;
     }
 
-    //TODO
+    //设置状态
     void setState(TBE tbe, Entry cache_entry, Addr addr, State state) {
         assert((Scache.isTagPresent(addr)) == false);
-        // MUST CHANGE
         if(is_valid(tbe)) {
             tbe.TBEState := state;
         }
@@ -194,7 +192,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
-    //TODO
+    //权限访问
     AccessPermission getAccessPermission(Addr addr) {
         TBE tbe := TBEs[addr];
         if(is_valid(tbe)) {
@@ -210,7 +208,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         return AccessPermission:NotPresent;
     }
 
-    //TODO
+    //读函数
     void functionalRead(Addr addr, Packet *pkt) {
         TBE tbe := TBEs[addr];
         if(is_valid(tbe)) {
@@ -220,7 +218,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         }
     }
 
-    //TODO
+    //写函数
     int functionalWrite(Addr addr, Packet *pkt) {
         int num_functional_writes := 0;
         TBE tbe := TBEs[addr];
@@ -232,7 +230,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
         return num_functional_writes;
     }
 
-    //TODO
+    //设置访问权限
     void setAccessPermission(Entry cache_entry, Addr addr, State state) {
         if (is_valid(cache_entry)) {
             cache_entry.changePermission(L0Cache_State_to_permission(state));

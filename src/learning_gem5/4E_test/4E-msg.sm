@@ -6,8 +6,8 @@ enumeration(CoherenceClass, desc="Types of messages") {
     FeachBlKI,          desc="不进SCache的取值令请求（指令流访问不可Cache存储器空间，或可Cache）";
 
     // 一次请求：数据流不命中Cache产生的请求
-    ReadBlk,           desc="读产生的取数请求（可Cache存储器空间Load类指令不命中Cache）";
-    ReadBlKDVic,       desc="读产生的带脏淘汰取数请求";
+    ReadBlk,            desc="读产生的取数请求（可Cache存储器空间Load类指令不命中Cache）";
+    ReadBlKDVic,        desc="读产生的带脏淘汰取数请求";
     ReadBlkMod,         desc="写产生的取数请求（可Cache存储器空间Store类指令不命中Cache）";
     ReadBlKModDvic,     desc="写产生的带脏淘汰的取数请求";
 
@@ -123,11 +123,12 @@ structure(CoherenceMsg, desc="...", interface="Message") {
 }
 
 // RequestMsg
+// LCPM发给GCPM的请求信息
 structure(RequestMsg, desc="...", interface="Message") {
     Addr addr,                      desc="Physical address for this request";
     CoherenceRequestType Type,      desc="Type of request (GetS, GetX, PutX, etc)";
     RubyAccessMode AccessMode,      desc="user/supervisor access type";
-    MachineID Requestor      ,      desc="What component request";
+    MachineID Requestor,            desc="What component request";
     NetDest Destination,            desc="What components receive the request, includes MachineType and num";
     MessageSizeType MessageSize,    desc="size category of the message";
     DataBlock DataBlk,              desc="Data for the cache line (if PUTX)";
@@ -151,6 +152,7 @@ structure(RequestMsg, desc="...", interface="Message") {
 }
 
 // ResponseMsg
+// GCPM发给LCPM的回答信息
 structure(ResponseMsg, desc="...", interface="Message") {
     Addr addr,                      desc="Physical address for this request";
     CoherenceResponseType Type,     desc="Type of response (Ack, Data, etc)";
