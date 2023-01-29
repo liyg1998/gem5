@@ -40,6 +40,8 @@
 
 // Various class of messages that can be exchanged between the L0 and the L1
 // controllers.
+
+//一次请求（和scache消息类型）
 enumeration(CoherenceClass, desc="...") {
   ReadBlkI,  desc="取指令请求，可Cache存储器空间取指且不引起数据Cache淘汰";
   ReadBlkIDVic, desc="带脏淘汰的取指令请求";
@@ -89,6 +91,7 @@ enumeration(CoherenceClass, desc="...") {
 
 }
 
+//向GCPM发的全局请求
 enumeration(CoherenceRequestType, desc="...") {
   //GRQ-GAK
   RdDataNC,    desc="数据不可cache读";
@@ -104,9 +107,11 @@ enumeration(CoherenceRequestType, desc="...") {
 
     //GSN-GRP
   PrbS,    desc="监听获得E/M状态数据，置无效Peer的副本，local期望拥有可写数据，独占";
+  PrbNCS,  desc="";
   PrbI,      desc="置无效Peer Cache的数据副本，脏数据回写主存，local不需要数据";
 }
 
+//GCPM回复/响应LCPM的消息
 enumeration(CoherenceResponseType, desc="...") {
   //GAK
   AckCpl,      desc="Home收齐所有监听回答";
@@ -136,10 +141,14 @@ structure(CoherenceMsg, desc="...", interface="Message") {
   MessageSizeType MessageSize,  desc="size category of the message";
   DataBlock DataBlk,            desc="Data for the cache line (if PUTX)";
   bool Dirty, default="false",  desc="Dirty bit";
-  //davi add
+  
+  //gubiao //davi add  START
   int request_size,    desc="uncached operate size";
   PrefetchBit Prefetch,         desc="Is this a prefetch request";
+  int AckCount, default="0",  desc="number of acks in this message";
+ //gubiao //davi add  END
 
+ 
   bool functionalRead(Packet *pkt) {
     // Only PUTX messages contains the data block
     if (Class == CoherenceClass:PUTX) {

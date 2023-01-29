@@ -513,9 +513,9 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                     } else { //Scache条目无效
                         //Scache missed  SCache不命中  （是否有空间）
                         if (Scache.cacheAvail(in_msg.LineAddress)) {
-                            // L0 does't have the line, but we have space for it
-                            // in the L0 so let's see if the L2 has it
-                            // L0没有线条，但我们在L0中有空间，所以让我们看看L2是否有线条
+                            // L0 does't have the line, but we have space for it  
+                            // in the L0 so let's see if the L2 has it  
+                            // L0没有cache line，但我们在L0中有空间，所以让我们看看L2是否有线条 
                             //触发的事件：Ifetch 
                             trigger(mandatory_request_type_to_event(in_msg.Type, in_msg.LineAddress,false, false), 
                                 in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
@@ -586,7 +586,7 @@ machine(MachineType:L0Cache, "MSI Directory SCache")
                                 //  触发的事件: Failed_SC
                                 //TODO:这个和上面第二个的触发有什么区别？
                                 trigger(Event:Failed_SC, in_msg.LineAddress, Scache_entry, TBEs[in_msg.LineAddress]);
-                            } else {
+                            } else {  
                                 if (Scache.cacheAvail(in_msg.LineAddress)) {    //Cache是否有空间
                                     // L1 does't have the line, but we have space for it
                                     // in the L0 let's see if the L1 has it
