@@ -46,46 +46,44 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
    Cycles to_l2_latency := 1;
 
    // Message Buffers between the L1 and the L0 Cache
-   // From the L1 cache to the L0 cache
-   MessageBuffer * bufferToL0, network="To";
-
    // From the L0 cache to the L1 cache
-   MessageBuffer * bufferFromL0, network="From";
+   MessageBuffer * Rq1FromL0, network="From";
+   // From the L1 cache to the L0 cache
+   MessageBuffer * Rq2ToL0, network="To";
+  // From the L0 cache to the L1 cache
+   MessageBuffer * RspFromL0, network="From"; 
+   // From the L1 cache to the L0 cache
+   MessageBuffer * AckToL0, network="To";
 
    // Message queue from this L1 cache TO the network / L2
-   MessageBuffer * requestToL2, network="To", virtual_network="0",
-        vnet_type="request";
+   MessageBuffer * requestToL2, network="To";
 
-   MessageBuffer * responseToL2, network="To", virtual_network="1",
-        vnet_type="response";
-   MessageBuffer * unblockToL2, network="To", virtual_network="2",
-        vnet_type="unblock";
+   MessageBuffer * responseToL2, network="To";
+   MessageBuffer * unblockToL2, network="To" ;
 
    // To this L1 cache FROM the network / L2
-   MessageBuffer * requestFromL2, network="From", virtual_network="2",
-        vnet_type="request";
-   MessageBuffer * responseFromL2, network="From", virtual_network="1",
-        vnet_type="response";
+   MessageBuffer * requestFromL2, network="From";
+   MessageBuffer * responseFromL2, network="From";
 
 {
   // STATES
   state_declaration(State, desc="Cache states", default="L1Cache_State_I") {
     // Base states
-    I, AccessPermission:Invalid, desc="L1 cache entry Idle";
-    S, AccessPermission:Read_Only, desc="Line is present in shared state in L1 and L0";
-    SS, AccessPermission:Read_Only, desc="Line is present in shared state in L1 but not L0";
-    EE, AccessPermission:Read_Write, desc="Line is present in exclusive state in L1 but not L0";
-    M, AccessPermission:Maybe_Stale, desc="Line is present in modified state in core and not present in LCPM", format="!b";
-    MM, AccessPermission:Read_Write, desc="Line is present in modified state in LCPM but not present in core", format="!b";
+    I, AccessPermission:Invalid, desc="L1 cache entry Idle"; //I 也可表示不命中，无副本，
+    S, AccessPermission:Read_Only, desc="Line is present in shared state in L1 and L0"; // s 且 local（核心）有副本 // L1表示Tcache，L0表示核心cache
+    SS, AccessPermission:Read_Only, desc="Line is present in shared state in L1 but not L0";// s 但 local(核心)无副本
+    EE, AccessPermission:Read_Write, desc="Line is present in exclusive state in L1 but not L0"; // Tcache清洁独占但是核心无副本
+    M, AccessPermission:Maybe_Stale, desc="Line is present in modified state in core and not present in LCPM", format="!b"; // 脏在核心
+    MM, AccessPermission:Read_Write, desc="Line is present in modified state in LCPM but not present in core", format="!b"; //M,但不脏在核心，脏在lcpm  
 
     // Transient States
-    IS, AccessPermission:Busy, desc="LCPM idle, issued GETS, have not seen response yet";
-    Inst_IS, AccessPermission:Busy, desc="LCPM idle, issued GETS, have not seen response yet";
-    IM, AccessPermission:Busy, desc="L1 idle, issued GETX, have not seen response yet";
-    SM, AccessPermission:Read_Only, desc="L1 idle, issued GETX, have not seen response yet";
-    IS_I, AccessPermission:Busy, desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit";
-    M_I, AccessPermission:Busy, desc="L1 replacing, waiting for ACK";
-    SINK_WB_ACK, AccessPermission:Busy, desc="This is to sink WB_Acks from L2";
+    IS, AccessPermission:Busy, desc="LCPM idle, issued GETS, have not seen response yet"; //gets ？  //LCPM中的数据从I变成S
+    Inst_IS, AccessPermission:Busy, desc="LCPM idle, issued GETS, have not seen response yet"; 
+    IM, AccessPermission:Busy, desc="L1 idle, issued GETX, have not seen response yet"; //getx？ //TCACHE中的数据从I变成M
+    SM, AccessPermission:Read_Only, desc="L1 idle, issued GETX, have not seen response yet"; //TCACHE中的数据从S变成M
+    IS_I, AccessPermission:Busy, desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit"; //“直接”不会对GETS的命中阻滞 
+    M_I, AccessPermission:Busy, desc="L1 replacing, waiting for ACK"; //TCACHE刷新，等待回答ACK
+    SINK_WB_ACK, AccessPermission:Busy, desc="This is to sink WB_Acks from L2"; //L2？
     //sw
     IEE,  AccessPermission:Busy, desc="LCPM idle, issued RSPI, have not seen response yet";
     RSPS_S, AccessPermission:Busy, desc="LCPM idle, issued RSPS, have not seen response yet";
@@ -94,13 +92,95 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
     // For all of the following states, invalidate
     // message has been sent to L0 cache. The response
-    // from the L0 cache has not been seen yet.
-    S_IL0, AccessPermission:Busy, desc="Shared in L1, invalidation sent to L0, have not seen response yet";
-    E_IL0, AccessPermission:Busy, desc="Exclusive in L1, invalidation sent to L0, have not seen response yet";
-    M_IL0, AccessPermission:Busy, desc="Modified in L1, invalidation sent to L0, have not seen response yet";
-    MM_IL0, AccessPermission:Read_Write, desc="Invalidation sent to L0, have not seen response yet";
-    MM_DL0, AccessPermission:Read_Write, desc="Invalidation sent to L0, have not seen response yet";
-    SM_IL0, AccessPermission:Busy, desc="Invalidation sent to L0, have not seen response yet";
+    // from the L0 cache has not been seen yet. // 驳斥信息还没有发到L0（核心）cache，来自L0（核心）cache的响应还没来
+    S_IL0, AccessPermission:Busy, desc="Shared in L1, invalidation sent to L0, have not seen response yet"; //Tcache中共享，
+    E_IL0, AccessPermission:Busy, desc="Exclusive in L1, invalidation sent to L0, have not seen response yet";//Tcache中独占，
+    M_IL0, AccessPermission:Busy, desc="Modified in L1, invalidation sent to L0, have not seen response yet"; //Tcache中脏，
+    MM_IL0, AccessPermission:Read_Write, desc="Invalidation sent to L0, have not seen response yet";  //？？？
+    MM_DL0, AccessPermission:Read_Write, desc="Invalidation sent to L0, have not seen response yet";  //？？？
+    SM_IL0, AccessPermission:Busy, desc="Invalidation sent to L0, have not seen response yet";  // ？？？
+
+  // add by gubiao 一些中间态 START
+  //5.6
+    MA1,  AccessPermission:Busy, desc="";
+    MA2, AccessPermission:Busy, desc="";
+    SMA, AccessPermission:Busy, desc="";
+    SMA_F, AccessPermission:Busy, desc="";
+    SMA_F1, AccessPermission:Busy, desc="";
+    SSMA, AccessPermission:Busy, desc="";
+    SSMA_F, AccessPermission:Busy, desc="";
+    SSMA_F1, AccessPermission:Busy, desc="";
+    II_M, AccessPermission:Busy, desc="";
+  // 5.8 
+  WriteNCBlk_M1, AccessPermission:Busy, desc="";
+  WriteNCBlk_M1_1, AccessPermission:Busy, desc=""; 
+  WriteNCBlk_M2, AccessPermission:Busy, desc="";
+  WriteNCBlk_M2_1, AccessPermission:Busy, desc="";
+  WriteNCBlk_M2_2, AccessPermission:Busy, desc="";
+  WriteNCBlk_M3, AccessPermission:Busy, desc="";
+  WriteNCBlk_M3_1, AccessPermission:Busy, desc="";
+  WriteNCBlk_M3_2, AccessPermission:Busy, desc=""; 
+  WriteNCBlk_M4, AccessPermission:Busy, desc="";
+  WriteNCBlk_M4_1, AccessPermission:Busy, desc="";
+
+  WriteNCBlk_M5, AccessPermission:Busy, desc="";
+  WriteNCBlk_M5_1, AccessPermission:Busy, desc="";
+
+
+  //5.9
+    Evic_data, AccessPermission:Busy, desc="get evictlocalblk, send puti to core,wait dataresponse";
+    Evic_nodata, AccessPermission:Busy, desc="get evictlocalblk, send geti to core,wait nodataresponse";
+  //5.10
+    Wvic_M1,AccessPermission:Busy, desc="get writevictimblk, send release to core,wait nodataresponse";
+    Wvic_M2,AccessPermission:Busy, desc="get writevictimblk, send release to core,wait dataresponse";
+  //5.11
+    Evic_ecache_M1,AccessPermission:Busy, desc="get EvictECacheBlk ,TTAG = S/E, send PUTI to core, wait nodataresponse"; //5.11.2
+    Evic_I, AccessPermission:Busy, desc="get ";    
+    Evic_ecache_M2,AccessPermission:Busy, desc="get EvictECacheBlk ,TTAG = MM, send PUTI to core, wait nodataresponse"; //5.11.3
+    Evic_ecache_M2_1,AccessPermission:Busy, desc="get EvictECacheBlk ,TTAG = MM, get nodataresponse, send WbMtoI to GCPM, wait PrbI"; //5.11.3
+    Evic_ecache_M3,AccessPermission:Busy, desc="get EvictECacheBlk ,TTAG = M, send GetI to core, wait nodataresponse"; //5.11.4
+    Evic_ecache_M3_1,AccessPermission:Busy, desc="get EvictECacheBlk ,TTAG = M, get nodataresponse, send WbMtoI to GCPM, wait PrbI"; //5.11.4
+ 
+  //5.12
+    Evic_Global_M1, AccessPermission:Busy, desc="get "; //5.12.1  
+    //5.12.2
+    Evic_Global_M2_1, AccessPermission:Busy, desc="get ";
+    Evic_Global_I_M2, AccessPermission:Busy, desc="get ";
+    Evic_Global_S_M2, AccessPermission:Busy, desc="get ";
+    Evic_Global_S_M2_1 , AccessPermission:Busy, desc="get ";
+    PrbI_MM_S, AccessPermission:Busy, desc="peer LCPM get PrbI ";
+    PrbI_M, AccessPermission:Busy, desc="peer LCPM get PrbI ";
+    //5.12.3
+    Evic_Global_M3,  AccessPermission:Busy, desc="get "; 
+    Evic_Global_M3_1,  AccessPermission:Busy, desc="get ";  
+    //5.12.4
+    Evic_Global_M4,  AccessPermission:Busy, desc="get ";   
+
+  //5.13
+    ECFETCHBLK_M1,  AccessPermission:Busy, desc="get "; 
+  //5.14
+    ECFETCHBLKMOD_M1,  AccessPermission:Busy, desc="get ";
+    ECFETCHBLKMOD_M2,  AccessPermission:Busy, desc="get ";
+
+  //5.15 ELIMINATED
+  //5.15.1
+    ELIMINATED_M1, AccessPermission:Busy, desc="get ";
+    ELIMINATED_M1_1,  AccessPermission:Busy, desc="get ";
+    ELIMINATED_M1_2,  AccessPermission:Busy, desc="get ";
+  //5.15.2
+    ELIMINATED_M2,  AccessPermission:Busy, desc="get "; 
+    ELIMINATED_M2_1,  AccessPermission:Busy, desc="get "; 
+    ELIMINATED_M2_2,  AccessPermission:Busy, desc="get ";
+
+    MMD,  AccessPermission:Busy, desc="peer M lcpm after get prbs ";
+  // add by gubiao 一些中间态 END
+
+  //by liyg
+    MM_M,    AccessPermission:Busy,         desc="脏在核心到脏在TCache的过渡阶段"
+    ReadNCData_M1,    AccessPermission:Busy,         desc="  5.7.3  ";
+    PROBNCS_R3_M,    AccessPermission:Busy,         desc="  for peer M lcpm after get probncs ";
+
+
   }
 
   // EVENTS
@@ -131,7 +211,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     RSPI,    desc="Response to GCPM, local has no data";
     RSPS,    desc="Response to GCPM, local has S or E data":
     RSPSWB,   desc="Response to GCPM, local has E data";
-    
+    RSPI_LOCAL,   desc=" local lcpm after get prbs";
+
+
     //Response from GCPM
     ACKEDATA,  desc="";
     ACKSDATA,  desc="";
@@ -150,13 +232,62 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
     WB_Ack,        desc="Ack for replacement";
 
-    // hardware transactional memory
+    // hardware transitional memory
     L0_DataCopy,     desc="Data Block from L0. Should remain in M state.";
 
     // L0 cache received the invalidation message and has
     // sent a NAK (because of htm abort) saying that the data
     // in L1 is the latest value.
     L0_DataNak,      desc="L0 received INV message, specifies its data is also stale";
+
+// add by gubiao  event START
+// 可cache读写 // 5.5
+    ReadBlk_R1, desc="";
+    ReadBlk_R2, desc="";
+    ReadBlk_R3, desc="";
+
+//刷新和淘汰，evictlocalblk，writevictimblk, evictecacheblk, evictglobalblk,
+    // internal generated request 
+  //5.9 核心cache刷新
+    EvictLocalBlk_R1,  desc="";
+    EvictLocalBlk_R2,  desc="";
+    EvictLocalBlk_R3_1,  desc="";
+    EvictLocalBlk_R3_2,  desc="";    
+  //5.10 核心cache写回
+    WrVictimBlk_R1,  desc="";
+    WrVictimBlk_R2,  desc="";    
+  //5.11 Tcache刷新 
+    EvictECacheBlk_R1,  desc="";
+    EvictECacheBlk_R2,  desc="";
+    EvictECacheBlk_R3,  desc="";
+    EvictECacheBlk_R4,  desc="";
+  //5.12 全局刷新请求
+    EvictGlobalBlk_R1,  desc="";
+    EvictGlobalBlk_R2,  desc="";
+    EvictGlobalBlk_R3,  desc="";
+    EvictGlobalBlk_R4,  desc="";
+    PrbI_R, desc="local LCPM's event after get PRBI";
+    PrbI_R1, desc="peer LCPM's event after get PRBI";
+    PrbI_R2, desc="peer LCPM's event after get PRBI";
+    PrbI_R3, desc="peer LCPM's event after get PRBI";
+    AckCpl_R, desc="rsp from GCPM" ;     
+    AckMData_R, desc="rsp from GCPM" ; 
+  //5.13
+    ECFETCHBLK_R1, desc="";
+    ECFETCHBLK_R2, desc="";
+  //5.14
+    ECFETCHBLKMOD_R1, desc="";  
+    ECFETCHBLKMOD_R2, desc="";  
+    ECFETCHBLKMOD_R3, desc="";      
+  //5.15
+    ELIMINATED_R1 , desc="";
+    ELIMINATED_R2 , desc="" ;   
+// add by gubiao event END
+
+    ReadNCData_R,     desc=" ";
+    WriteNCBlk_R1,    desc="";
+    WriteNCBlk_R2,    desc="";
+
   }
 
   // TYPES
@@ -172,17 +303,15 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
   // TBE fields
   structure(TBE, desc="...") {
-    Addr addr,              desc="Physical address for this TBE";
-    State TBEState,        desc="Transient state";
-    DataBlock DataBlk,                desc="Buffer for the data block";
+    Addr addr,                     desc="Physical address for this TBE";
+    State TBEState,                desc="Transient state";
+    DataBlock DataBlk,             desc="Buffer for the data block";
     bool Dirty, default="false",   desc="data is dirty";
-
-    NetDest L0_GetS_IDs,            desc="Set of the internal processors that want the block in shared state";
-    MachineID L0_GetX_IDs,          desc="ID of the L1 cache to forward the block to once we get a response";
-    int pendingAcks, default="0", desc="number of pending acks";
+    NetDest L0_GetS_IDs,           desc="Set of the internal processors that want the block in shared state";
+    MachineID L0_GetX_IDs,         desc="ID of the L1 cache to forward the block to once we get a response";
+    MachineID Inmsg_Sender,        desc="to save the in_msg.sender";   
+    int pendingAcks, default="0",  desc="number of pending acks";
   }
-
-  
 
   structure(TBETable, external="yes") {
     TBE lookup(Addr);
@@ -292,30 +421,51 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
   }
 
-  Event mandatory_request_type_to_event(CoherenceClass type) {
-    if ((type == CoherenceClass:ReadBlkI) || (type == CoherenceClass::ReadBlk)) {
-      return Event:Load;
-    }else if((type == CoherenceClass:ReadBlkIDVic) || (type == CoherenceClass::ReadBlkDVic)){
-      return Event:Ifetch;
-    } else if ((type == CoherenceClass:ReadBlkMod) || (type == CoherenceClass:ReadBlkModDVic)) {
-        if(getState(tbe, cache_entry, in_msg.addr) == State:EE ||
-           getState(tbe, cache_entry, in_msg.addr) == State:MM)
-              return Event:Store_Hit_MM;
-        else if(getState(tbe, cache_entry, in_msg.addr) == State:M){
-              return Event:Store_Hit_M;
-        }else if(getState(tbe, cache_entry, in_msg.addr) == State:S ||
-                 getState(tbe, cache_entry, in_msg.addr) == State:SS){
-              return Event:Store_Hit_S;
-        }else
-              return Event:Store_Miss;
-    }else if ((type == CoherenceClass:ShareToDirty)){
-        return Event:Store_Core_Hit;
-    }else if (type == CoherenceClass:PUTX) {
-      return Event:WriteBack;
-    } else {
-      error("Invalid RequestType");
-    }
+// add by gubiao for 淘汰 START
+  int isCached(Addr addr){   
+     return(addr>>48&0x01); 
   }
+  Event mandatory_request_type_to_event(CoherenceClass type, Addr addr, bool is_cache, int line_size) {  //modify by gubiao
+    if(!is_cache) {
+      // return 不可cache的EVENT
+         if (type == CoherenceClass:ReadNCBlk ) { 
+           return Event:ReadNCData_R;
+         } 
+         else if (type == CoherenceClass:WriteNCBlk ) {
+              if( line_size == 1024 ){ 
+                  return Event:WriteNCBlk_R1;
+              } else {
+                 return Event:WriteNCBlk_R2;
+              }
+
+          }
+    }
+    else {          
+          if ((type == CoherenceClass:ReadBlkDVic) || (type == CoherenceClass::ReadBlk) || (type == CoherenceClass:ReadBlkIDVic) || (type == CoherenceClass::ReadBlkI) ) {  //可cache读请求
+              return Event:Load;
+           } else if((type == CoherenceClass::FetchBlkI) ){  //可cache读请求 //做出此区分的原因是两者导致local核心的变化不同
+              return Event:Ifetch;                 
+           } else if ((type == CoherenceClass:ReadBlkMod) || (type == CoherenceClass:ReadBlkModDVic)) {       // 可cache 写请求
+             if(getState(tbe, cache_entry, in_msg.addr) == State:EE ||
+                getState(tbe, cache_entry, in_msg.addr) == State:MM)
+                   return Event:Store_Hit_MM;
+             else if(getState(tbe, cache_entry, in_msg.addr) == State:M){
+                   return Event:Store_Hit_M;
+             }else if(getState(tbe, cache_entry, in_msg.addr) == State:S ||
+                      getState(tbe, cache_entry, in_msg.addr) == State:SS){
+                   return Event:Store_Hit_S;
+             }else
+                   return Event:Store_Miss;
+           } else if ((type == CoherenceClass:ShareToDirty)){
+             return Event:Store_Core_Hit;          
+           } else {
+             error("Invalid CoherenceClass");
+           }
+         }
+  } 
+
+// add by gubiao for 淘汰 END
+
 
   int getPendingAcks(TBE tbe) {
     return tbe.pendingAcks;
@@ -333,7 +483,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   out_port(requestNetwork_out, RequestMsg, requestToL2);
   out_port(responseNetwork_out, ResponseMsg, responseToL2);
   out_port(unblockNetwork_out, ResponseMsg, unblockToL2);
-  out_port(bufferToL0_out, CoherenceMsg, bufferToL0);
+
+  out_port(Rq2bufferToL0_out, CoherenceMsg, Rq2ToL0);
+  out_port(AckbufferToL0_out, CoherenceMsg, AckToL0);
 
   // Response From the network(GCPM) to this LCPM
   in_port(responseNetwork_in, ResponseMsg, responseFromL2, rank = 2) {
@@ -348,7 +500,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
           trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
         }else if(in_msg.Type == CoherenceResponseType:AckEData){
           trigger(Event:ACKEDATA, in_msg.addr, cache_entry, tbe);
-        }else if(in_msg.Type == CoherenceResponseType:AckEData){
+          }else if(in_msg.Type == CoherenceResponseType:AckData){   
+                    trigger(Event:AckData, in_msg.addr, cache_entry, tbe);
+        }else if(in_msg.Type == CoherenceResponseType:AckSData){
           trigger(Event:ACKSDATA, in_msg.addr, cache_entry, tbe);
         }else if(in_msg.Type == CoherenceResponseType:tododavid) {
           if ((getState(tbe, cache_entry, in_msg.addr) == State:IS ||
@@ -373,6 +527,11 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
           }
         } else if (in_msg.Type == CoherenceResponseType:WB_ACK) {
           trigger(Event:WB_Ack, in_msg.addr, cache_entry, tbe);
+        } else if (in_msg.Type == CoherenceResponseType:AckCpl) {   //gubiao
+          trigger(Event:AckCpl_R, in_msg.addr, cache_entry, tbe);   //gubiao
+        } else if (in_msg.Type == CoherenceResponseType:AckMData) {   //gubiao
+          trigger(Event:AckMData_R, in_msg.addr, cache_entry, tbe);   //gubiao           
+
         } else {
           error("Invalid L1 response type");
         }
@@ -380,42 +539,49 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
   }
 
-  // Request to this LCPM from the GCPM
+  // Request to this LCPM from the GCPM GRQ2   //需要注意对开流程
   in_port(requestNetwork_in, RequestMsg, requestFromL2, rank = 1) {
     if(requestNetwork_in.isReady(clockEdge())) {
       peek(requestNetwork_in, RequestMsg) {
         assert(in_msg.Destination.isElement(machineID));
         Entry cache_entry := getCacheEntry(in_msg.addr);
-        TBE tbe := TBEs[in_msg.addr];
-
-        if (in_msg.Type == CoherenceRequestType:INV) {
-            if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
-                trigger(Event:L0_Invalidate_Else, in_msg.addr,
-                        cache_entry, tbe);
-            }  else {
-                trigger(Event:Inv, in_msg.addr, cache_entry, tbe);
-            }
-        } else if (in_msg.Type == CoherenceRequestType:GETX ||
-                   in_msg.Type == CoherenceRequestType:UPGRADE) {
-            if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
-                trigger(Event:L0_Invalidate_Else, in_msg.addr,
-                        cache_entry, tbe);
-            } else {
-                trigger(Event:Fwd_GETX, in_msg.addr, cache_entry, tbe);
-            }
-        } else if (in_msg.Type == CoherenceRequestType:PrbS) {
+        TBE tbe := TBEs[in_msg.addr];       
+        if (in_msg.Type == CoherenceRequestType:PrbI) {    
+                if (getState(tbe, cache_entry, in_msg.addr) == State:S
+                  || getState(tbe, cache_entry, in_msg.addr) == State:MM// 需要加上IS等状态// needchange 
+                  || getState(tbe, cache_entry, in_msg.addr) == State:EE ){  // 5.12.2 && 5.6.3 peer LCPM need to do
+                trigger(Event:PrbI_R1, in_msg.addr, cache_entry, tbe);              
+              }
+              else if (getState(tbe, cache_entry, in_msg.addr) == State:M ){  // 5.12.2 && 5.6.3 peer LCPM need to do
+                 trigger(Event:PrbI_R2, in_msg.addr, cache_entry, tbe);              
+             }            
+              else if (getState(tbe, cache_entry, in_msg.addr) == State:I ){  // 5.12.2 && 5.6.3 peer LCPM need to do
+                  trigger(Event:PrbI_R3, in_msg.addr, cache_entry, tbe);              
+              }  
+              else{   //for local lcpm
+                  trigger(Event:PrbI_R, in_msg.addr, cache_entry, tbe);                   
+              }                                 
+        } else if (in_msg.Type == CoherenceRequestType:PrbS) {  //for 5.5.3  after peer lcpm  get prbs , need to do 
           //we do not need to evict the data in core on sw, because when write to core, sharetodrity will give to lcpm;
-            if(getState(tbe, cache_entry, in_msg.addr) == State:IS || getState(tbe, cache_entry, in_msg.addr) == State:I || getState(tbe, cache_entry, in_msg.addr) == State:Inst_IS){
-                trigger(Event:RSPI, in_msg.addr, cache_entry, tbe);
+            if(getState(tbe, cache_entry, in_msg.addr) == State:I ){
+                trigger(Event:RSPI, in_msg.addr, cache_entry, tbe);   
             }else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:EE){
                 trigger(Event:RSPS, in_msg.addr, cache_entry, tbe);
-            }else if(getState(tbe, cache_entry, in_msg.addr) == State:MM){
+            }else if(getState(tbe, cache_entry, in_msg.addr) == State:MM || getState(tbe, cache_entry, in_msg.addr) == State:M ){
                 trigger(Event:RSPSWB, in_msg.addr, cache_entry, tbe);
-            }else if(getState(tbe, cache_entry, in_msg.addr) == State:M){
-                if(getState(tbe, cache_entry, in_msg.addr) == State:MM_G)
-                   trigger(Event:RSPSWB, in_msg.addr, cache_entry, tbe);
-            }else{
-                
+            }else{  // for local lcpm 
+                trigger(Event:RSPI_LOCAL, in_msg.addr, cache_entry, tbe);     // local lcpm after get prbs             
+            }
+
+        } else if (in_msg.Type == CoherenceRequestType:ProbNCS) {  // for 5.7.3  ProbNCS
+            if(getState(tbe, cache_entry, in_msg.addr) == State:I ){
+                trigger(Event:PROBNCS_R1, in_msg.addr, cache_entry, tbe);   
+            }else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:EE){
+                trigger(Event:PROBNCS_R2, in_msg.addr, cache_entry, tbe);
+            }else if(getState(tbe, cache_entry, in_msg.addr) == State:MM || getState(tbe, cache_entry, in_msg.addr) == State:M ){
+                trigger(Event:PROBNCS_R3, in_msg.addr, cache_entry, tbe);
+            }else{  // for local lcpm 
+                trigger(Event:PROBNCS_R4, in_msg.addr, cache_entry, tbe);     // local lcpm after get ProbNCS          
             }
         } else {
           error("Invalid forwarded request type");
@@ -424,13 +590,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
   }
 
-  // Response/Request to this LCPM from the L0 cache.
-  in_port(messageBufferFromL0_in, CoherenceMsg, bufferFromL0, rank = 0) {
-    if (messageBufferFromL0_in.isReady(clockEdge())) {
-      peek(messageBufferFromL0_in, CoherenceMsg) {
-        Entry cache_entry := getCacheEntry(in_msg.addr);
-        TBE tbe := TBEs[in_msg.addr];
 
+  // Request to this LCPM from the L0 cache.
+  in_port(Req1BufferFromL0_in, CoherenceMsg, Rq1FromL0, rank = 0) {
+    if (Req1BufferFromL0_in.isReady(clockEdge())) {
+      peek(Req1BufferFromL0_in, CoherenceMsg) {
+        Entry cache_entry := getCacheEntry(in_msg.addr);
+        TBE tbe := TBEs[in_msg.addr];  
         if(in_msg.Class == CoherenceClass:INV_DATA) {
             trigger(Event:L0_DataAck, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:NAK) {
@@ -439,51 +605,204 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
               trigger(Event:L0_DataCopy, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:INV_ACK) {
             trigger(Event:L0_Ack, in_msg.addr, cache_entry, tbe);
-        }  else if (in_msg.Class == CoherenceClass:DataResponse) {
-            trigger(Event:DataResponse_Ack, in_msg.addr, cache_entry, tbe);
-        }  else if (in_msg.Class == CoherenceClass:NoDataResponse) {
-            trigger(Event:NoDataResponse_Ack, in_msg.addr, cache_entry, tbe);
-        }else {
-            if (is_valid(cache_entry)) {
-                trigger(mandatory_request_type_to_event(in_msg.Class),
-                        in_msg.addr, cache_entry, tbe);
-            } else {
-                if (cache.cacheAvail(in_msg.addr)) {
-                    // L1 does't have the line, but we have space for it
-                    // in the L1 let's see if the L2 has it
-                    trigger(mandatory_request_type_to_event(in_msg.Class),
-                            in_msg.addr, cache_entry, tbe);
-                } else {
-                    // No room in the L1, so we need to make room in the L1
-                    Addr victim := cache.cacheProbe(in_msg.addr);
-                    Entry victim_entry := getCacheEntry(victim);
-                    TBE victim_tbe := TBEs[victim];
 
-                    if (is_valid(victim_entry) && inL0Cache(victim_entry.CacheState)) {
-                        trigger(Event:L0_Invalidate_Own,
-                                victim, victim_entry, victim_tbe);
-                    }  else {
-                        trigger(Event:L1_Replacement,
-                                victim, victim_entry, victim_tbe);
-                    }
-                }
+        //EvictLocalBlk_R    //5.9
+        }  else if (in_msg.Class == CoherenceClass:EvictLocalBlk ) {
+              // 1、不命中。2、 脏在核心，但是owner位中local位对应位无效 
+            if(getState(tbe, cache_entry, in_msg.addr) == State:I ){
+               trigger(Event:EvictLocalBlk_R1, in_msg.addr, cache_entry, tbe) 
+             }
+             //  清洁独占/清洁共享/脏且脏在Tcache 且owner位中local核心对应位有效
+            else if((getState(tbe, cache_entry, in_msg.addr) == State:EE 
+            || getState(tbe, cache_entry, in_msg.addr) == State:S 
+            || getState(tbe, cache_entry, in_msg.addr) == State:MM )){
+               trigger(Event:EvictLocalBlk_R2, in_msg.addr, cache_entry, tbe)
             }
-        }
+            //脏在核心，owner位中指示最新的数据在local核心 //
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:M  ){ 
+               trigger(EvictLocalBlk_R3(in_msg.sender, cache_entry), in_msg.addr, cache_entry, tbe)
+            }   
+
+        //writevictimblk //5.10
+        }  else if (in_msg.Class == CoherenceClass:WrVictimBlk) {     
+            if(getState(tbe, cache_entry, in_msg.addr) == State:I 
+            || getState(tbe, cache_entry, in_msg.addr ) == State:MM 
+            || getState(tbe, cache_entry, in_msg.addr ) == State:S      
+            || getState(tbe, cache_entry, in_msg.addr ) == State:EE ){ 
+               trigger(Event:WrVictimBlk_R1, in_msg.addr, cache_entry, tbe) 
+             }
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:M){
+               trigger(Event:WrVictimBlk_R2, in_msg.addr, cache_entry, tbe)
+            }
+
+           //EvictECacheBlk_R //5.11
+        }  else if (in_msg.Class == CoherenceClass:EvictECacheBlk) {
+            if(getState(tbe, cache_entry, in_msg.addr) == State:I ){ 
+               trigger(Event:EvictECacheBlk_R1, in_msg.addr, cache_entry, tbe) 
+             }
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:EE  ){
+               trigger(Event:EvictECacheBlk_R2, in_msg.addr, cache_entry, tbe)
+            }   
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:MM  ){
+               trigger(Event:EvictECacheBlk_R3, in_msg.addr, cache_entry, tbe)
+            }   
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:M  ){
+               trigger(Event:EvictECacheBlk_R4, in_msg.addr, cache_entry, tbe)
+            }   
+
+            //EvictGlobalBlk //5.12
+        }  else if (in_msg.Class == CoherenceClass:EvictGlobalBlk) {            
+            if(getState(tbe, cache_entry, in_msg.addr) == State:EE ){ 
+               trigger(Event:EvictGlobalBlk_R1, in_msg.addr, cache_entry, tbe) 
+             }
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:S || getState(tbe, cache_entry, in_msg.addr) == State:I  ){
+               trigger(Event:EvictGlobalBlk_R2, in_msg.addr, cache_entry, tbe)
+            }   
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:MM  ){
+               trigger(Event:EvictGlobalBlk_R3, in_msg.addr, cache_entry, tbe)
+            }   
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:M ){
+               trigger(Event:EvictGlobalBlk_R4, in_msg.addr, cache_entry, tbe)
+            }   
+
+            // ECFetchBlk //5.13
+        }  else if (in_msg.Class == CoherenceClass:ECFetchBlk) {            
+            if(getState(tbe, cache_entry, in_msg.addr) == State:MM 
+            || getState(tbe, cache_entry, in_msg.addr) == State:M
+            || getState(tbe, cache_entry, in_msg.addr) == State:EE
+            || getState(tbe, cache_entry, in_msg.addr) == State:S ){ 
+               trigger(Event:ECFETCHBLK_R1, in_msg.addr, cache_entry, tbe) 
+             }
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:I  ){
+               trigger(Event:ECFETCHBLK_R2, in_msg.addr, cache_entry, tbe)
+            }   
+
+            // ECFetchBlkMod // 5.14
+        }  else if (in_msg.Class == CoherenceClass:ECFetchBlkMod) {            
+            if(getState(tbe, cache_entry, in_msg.addr) == State:MM
+            || getState(tbe, cache_entry, in_msg.addr) == State:M
+            || getState(tbe, cache_entry, in_msg.addr) == State:EE  ){ 
+               trigger(Event:ECFETCHBLKMOD_R1, in_msg.addr, cache_entry, tbe) 
+             }
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:S ){
+               trigger(Event:ECFETCHBLKMOD_R2, in_msg.addr, cache_entry, tbe)
+            }   
+            else if(getState(tbe, cache_entry, in_msg.addr) == State:I ){
+               trigger(Event:ECFETCHBLKMOD_R3, in_msg.addr, cache_entry, tbe)
+            }               
+            // 5.5 + 5.6 + 5.7 + 5.8 + 5.15
+        }else {    // modify by gubiao
+              if(!isCached(in_msg.addr)) {  // 不可Cache 
+                  //可能触发的事件:  不可cache读写
+                  trigger(mandatory_request_type_to_event(in_msg.Class, in_msg.addr,  false , in_msg.request_size ),  in_msg.addr, cache_entry, tbe);
+              } else { //可cache类请求   
+                  //Entry cache_entry := getCacheEntry(in_msg.addr);
+                  if (cache.cacheAvail(in_msg.addr)) {    //先查询Cache是否有空间  
+                      trigger(mandatory_request_type_to_event(in_msg.Class, in_msg.addr,  true , in_msg.request_size ), in_msg.addr, cache_entry, tbe);
+                    } else {  
+                       // No room in the cache, so we need to make room in the cache   
+                       // 淘汰 //5.15         
+                       Addr victim := cache.cacheProbe(in_msg.addr);
+                       Entry victim_entry := getCacheEntry(victim);
+                       TBE victim_tbe := TBEs[victim];                    
+                        if(getState(victim_tbe, victim_entry, victim) == State:M ) {
+                           trigger(Event:ELIMINATED_R1, victim, victim_entry, victim_tbe);   //5.15.1
+                        }
+                        else if (getState(victim_tbe, victim_entry, victim) == State:MM ) {
+                           trigger(Event:ELIMINATED_R2, victim, victim_entry, victim_tbe);   //5.15.2
+                        }
+                      } 
+                   }               
+         }
       }
     }
   }
 
+
+  // Response to this LCPM from the L0 cache.
+  in_port(rspBufferFromL0_in, CoherenceMsg, RspFromL0, rank = 0) {
+    if (rspBufferFromL0_in.isReady(clockEdge())) {
+      peek(rspBufferFromL0_in, CoherenceMsg) {
+        Entry cache_entry := getCacheEntry(in_msg.addr);
+        TBE tbe := TBEs[in_msg.addr];  
+        if (in_msg.Class == CoherenceClass:DataResponse) {  
+            trigger(Event:DataResponse_Ack, in_msg.addr, cache_entry, tbe);
+        }  else if (in_msg.Class == CoherenceClass:NoDataResponse) { 
+              if ((getPendingAcks(tbe) - in_msg.AckCount) == 0) {                     
+              trigger(Event:NoDataResponse_Ack_all, in_msg.addr, cache_entry, tbe);   
+            } else {                                                                  
+              trigger(Event:NoDataResponse_Ack, in_msg.addr, cache_entry, tbe);       
+            }
+        }  
+      }
+    }
+  }
+
+
+
   // ACTIONS
+//add by gubiao 2023 start
+  action(kk_removeRequestModifier, "\k", desc="Remove  Request Modifier from l0") {
+     peek(Req1BufferFromL0_in, CoherenceMsg) {   
+      assert(is_valid(cache_entry));
+      cache_entry.Modifier.remove(in_msg.Requestor);
+    }
+  }
+
+  action( kk_removeRspModifier_rsp, "\k", desc="Remove  Request Modifier from l0") {
+     peek(rspBufferFromL0_in, CoherenceMsg) {   
+      assert(is_valid(cache_entry));
+      cache_entry.Modifier.remove(in_msg.Requestor);
+    }
+  }
+
+  action(nn_putModifier_ownercore, "\nm", desc="Put owner_core entry to M") {   //change2023gub
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      putModifier(address, in_msg.Sender, cache_entry);
+      APPEND_TRANSITION_COMMENT( cache_entry.Modifier);
+    }
+  }
+
+  action(ll_clearSharers_ownercore, "\l", desc="Remove owner_core sharers from list") {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      cache_entry.Sharers.remove(in_msg.Requestor);
+    }
+  }
+
+  action(ll_clearSharers_ownercore_rsp, "\l", desc="Remove owner_core sharers from list") {
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      cache_entry.Sharers.remove(in_msg.Requestor);
+    }
+  }
+
+  action(ll_clearModifier_ownercore_rsp, "\l", desc="Remove Modifier list") {
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      cache_entry.Modifier.remove(in_msg.Requestor);
+    }
+  }
+//add by gubiao 2023 end
 
   action(ll_clearSharers, "\l", desc="Remove all L0 sharers from list") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       cache_entry.Sharers.clear();
     }
   }
 
-  action(nn_addSharer, "\n", desc="Add L0 sharer to list") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+  action(nn_addSharer, "\n", desc="Add L0 sharer to list") {  //置owner位中local核心对应位有效
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      addSharer(address, in_msg.Sender, cache_entry);
+      APPEND_TRANSITION_COMMENT( cache_entry.Sharers );
+    }
+  }
+
+  action(nn_addSharer_rsp, "\n", desc="Add L0 sharer to list") {  //置owner位中local核心对应位有效
+    peek(rspBufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       addSharer(address, in_msg.Sender, cache_entry);
       APPEND_TRANSITION_COMMENT( cache_entry.Sharers );
@@ -491,29 +810,155 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(nn_putModifier, "\nm", desc="Put LCPM entry to M") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       putModifier(address, machineID, cache_entry);
-      APPEND_TRANSITION_COMMENT( cache_entry.Modefier);
+      APPEND_TRANSITION_COMMENT( cache_entry.Modifier);
+    }
+  }
+
+  action(nn_putModifier_rsp, "\nm", desc="Put LCPM entry to M") {
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(cache_entry));
+      putModifier(address, machineID, cache_entry);
+      APPEND_TRANSITION_COMMENT( cache_entry.Modifier);
     }
   }
 
   action(ss_recordGetSL0ID, "\s", desc="Record L0 GetS for load response") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       assert(is_valid(tbe));
       tbe.L0_GetS_IDs.add(in_msg.Sender);
     }
   }
 
+  //by liyg
+    action(a_issueRdDataNC, "a", desc="Issue RdDataNC") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:RdDataNC;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issueWrDataNC, "a", desc="Issue WrDataNC") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:WrDataNC;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issueWbMtoI, "a", desc="Issue WbMtoI") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:WbMtoI;
+                out_msg.Requestor := machineID;
+                out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));//SAT
+                DPRINTF(RubySlicc, "address: %#x, destination: %s\n", address, out_msg.Destination);
+                out_msg.MessageSize := MessageSizeType:Control;
+                out_msg.AccessMode := in_msg.AccessMode;
+                out_msg.Prefetch := in_msg.Prefetch;
+            }
+        }
+    }
+
+    //by liyg  
+ 
+    action(a_issueGETR, "a", desc="Issue GetR 取数并释放缓冲") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_request_latency) {
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:GetR;
+                out_msg.Sender := machineID;
+                out_msg.Dest := cache_entry.Modifier;//判断脏在那个核心就去那个地方
+                out_msg.MessageSize := MessageSizeType:Control;
+            }
+        }
+    }
+
+    //by liyg
+    action(a_issuePUTI, "a", desc="Issue PUTI 向owner为核心的发送置无效") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(Rq2bufferToL0_out, CoherenceMsg, to_l1_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Type := CoherenceRequestType:PutI;
+                out_msg.Requestor := machineID;
+                out_msg.Destination := cache_entry.Sharers;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+                out_msg.AckCount := 0 - cache_entry.Sharers.count();
+                if (cache_entry.Sharers.isElement(in_msg.Requestor)) {  // 如果local核心也有副本，则AckCount需要+1
+                    out_msg.AckCount := out_msg.AckCount + 1;
+                }   
+            }  
+        }  
+    }
+
+    //by liyg
+    action(h_data1_to_l0, "h", desc="回复DataNCBlk的响应") {
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+            enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+                assert(is_valid(cache_entry));
+                out_msg.addr := address;
+                out_msg.Class := CoherenceClass:ReadNCData_Ack;
+                out_msg.Sender := machineID;
+                out_msg.Dest := in_msg.Sender;
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+            }
+        }
+        cache.setMRU(address);
+    }
+
+    //by liyg
+    action(issue_WriteComplete, "\h", desc="回复WriteNCBlk的响应WriteComplete") {
+        enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+            assert(is_valid(cache_entry));
+            out_msg.addr := address;
+            out_msg.Class := CoherenceClass:WriteComplete;
+            out_msg.Sender := machineID;
+            out_msg.Dest := cache_entry.Modifier;
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        cache.setMRU(address);
+    }
+   
+  action(ss_recorinmsgL0ID, "\s", desc="Record L0 GetS for load response") {  //add by gub 0112
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      assert(is_valid(tbe));
+      tbe.Inmsg_Sender := in_msg.Sender;
+    }
+  }
+
   action(ss_recordGetXL0ID, "\s", desc="Record L0 GETX(M) for load response") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       cache_entry.Modifier := in_msg.Sender;
     }
   }
 
   action(a_issueRdDataS, "a", desc="Issue RdDataS") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
         out_msg.addr := address;
         out_msg.Type := CoherenceRequestType:RdDataS;
@@ -529,19 +974,31 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(a_issueGETI, "a", desc="Issue GetI") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_request_latency) {
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:GetI;
           out_msg.Sender := machineID;
-          out_msg.Dest := cache_entry.Modifier;//when get DataResponse, turn this cache_entry.Modifier to localmachineid,and add orig Modefier to shaders
+          out_msg.Dest := cache_entry.Modifier;
+          out_msg.MessageSize := MessageSizeType:Control;
+      }
+    }
+  }
+
+  action(a_issueGETS, "a", desc="Issue GetS") {  // add by gubiao
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_request_latency) {
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:GetS;
+          out_msg.Sender := machineID;
+          out_msg.Dest := cache_entry.Modifier;
           out_msg.MessageSize := MessageSizeType:Control;
       }
     }
   }
 
   action(b_issueGETX, "b", desc="Issue GETX") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
         out_msg.addr := address;
         out_msg.Type := CoherenceRequestType:GETX;
@@ -559,7 +1016,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(c_issueUPGRADE, "c", desc="Issue GETX") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       enqueue(requestNetwork_out, RequestMsg, l1_request_latency) {
         out_msg.addr := address;
         out_msg.Type := CoherenceRequestType:UPGRADE;
@@ -579,7 +1036,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     peek(requestNetwork_in, RequestMsg) {
       enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
         assert(is_valid(cache_entry));
-        out_msg.addr := address;
+         .addr := address;
         out_msg.Type := CoherenceResponseType:DATA;
         out_msg.DataBlk := cache_entry.DataBlk;
         out_msg.Dirty := cache_entry.Dirty;
@@ -687,7 +1144,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(forward_eviction_to_L0_own, "\cc", desc="sends (own) eviction information to the processor") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_request_latency) {
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:INV_OWN;
           out_msg.Sender := machineID;
@@ -697,7 +1154,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(forward_eviction_to_L0_else, "\cce", desc="sends (else) eviction information to the processor") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_request_latency) {
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:INV_ELSE;
           out_msg.Sender := machineID;
@@ -750,8 +1207,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(h_data_to_l0, "h", desc="If not prefetch, send data to the L0 cache.") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
 
           out_msg.addr := address;
@@ -767,8 +1224,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(h_instruction_to_l0, "h", desc="If not prefetch, send data to the L0 cache.") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
 
           out_msg.addr := address;
@@ -785,7 +1242,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
 
   action(hh_sdata_to_l0, "\h", desc="If not prefetch, notify sequencer that store completed.") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
 
           out_msg.addr := address;
@@ -805,7 +1262,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(hh_insdata_to_l0, "\hin", desc="If not prefetch, notify sequencer that store completed.") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
 
           out_msg.addr := address;
@@ -816,55 +1273,41 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
           out_msg.DataBlk := cache_entry.DataBlk;
           out_msg.Dirty := cache_entry.Dirty;
           out_msg.MessageSize := MessageSizeType:Response_Data;
-
           //cache_entry.Dirty := true;
       }
-
       cache.setMRU(address);
   }
 
-  action(hh_xdata_to_l0, "\h", desc="If not prefetch, notify sequencer that store completed.") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+  action(hh_xdata_to_l0_local_core, "\h", desc="If not prefetch, notify sequencer that store completed.") {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
-
           out_msg.addr := address;
-          if(im_msg.Class == CoherenceClass:ReadBlkI)
           out_msg.Class := CoherenceClass:ReadDataShare;
           out_msg.Sender := machineID;
-          //out_msg.Dest := createMachineID(MachineType:L0Cache, version);
-          out_msg.Dest := cache_entry.Modefier;
-          out_msg.DataBlk := cache_entry.DataBlk;
-          out_msg.Dirty := cache_entry.Dirty;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := tbe.DataBlk;
           out_msg.MessageSize := MessageSizeType:Response_Data;
-
-          //cache_entry.Dirty := true;
       }
-
       cache.setMRU(address);
   }
 
-  action(hh_inxdata_to_l0, "\hin", desc="If not prefetch, notify sequencer that store completed.") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
-          assert(is_valid(cache_entry));
 
+  action(hh_inxdata_to_l0_local_core, "\hin", desc="If not prefetch, notify sequencer that store completed.") {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:ReadData;
           out_msg.Sender := machineID;
-          //out_msg.Dest := createMachineID(MachineType:L0Cache, version);
-          out_msg.Dest := cache_entry.Modefier
-          out_msg.DataBlk := cache_entry.DataBlk;
-          out_msg.Dirty := cache_entry.Dirty;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := tbe.DataBlk;
           out_msg.MessageSize := MessageSizeType:Response_Data;
-
-          //cache_entry.Dirty := true;
       }
-
       cache.setMRU(address);
   }
 
 
   action(h_stale_data_to_l0, "hs", desc="If not prefetch, send data to the L0 cache.") {
-      enqueue(bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
           assert(is_valid(cache_entry));
 
           out_msg.addr := address;
@@ -889,8 +1332,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(k_popL0RequestQueue, "k", desc="Pop mandatory queue.") {
-    messageBufferFromL0_in.dequeue(clockEdge());
+    Req1BufferFromL0_in.dequeue(clockEdge());
   }
+
+  action(k_popL0RspQueue, "k", desc="Pop mandatory queue.") {
+    rspBufferFromL0_in.dequeue(clockEdge());
+  }
+
 
   action(l_popL2RequestQueue, "l",
          desc="Pop incoming request queue and profile the delay within this virtual network") {
@@ -910,7 +1358,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(u_writeDataFromL0Request, "ureql0", desc="Write data to cache") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       if (in_msg.Dirty) {
           cache_entry.DataBlk := in_msg.DataBlk;
@@ -928,7 +1376,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(u_writeDataFromL0Response, "uresl0", desc="Write data to cache") {
-    peek(messageBufferFromL0_in, CoherenceMsg) {
+    peek(rspBufferFromL0_in, CoherenceMsg) {
       assert(is_valid(cache_entry));
       if (in_msg.Dirty) {
           cache_entry.DataBlk := in_msg.DataBlk;
@@ -938,7 +1386,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(q_updateAckCount, "q", desc="Update ack count") {
-    peek(responseNetwork_in, ResponseMsg) {
+    peek(rspBufferFromL0_in, CoherenceMsg) {
       assert(is_valid(tbe));
       tbe.pendingAcks := tbe.pendingAcks - in_msg.AckCount;
       APPEND_TRANSITION_COMMENT(in_msg.AckCount);
@@ -962,7 +1410,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   action(z0_stallAndWaitL0Queue, "\z0", desc="recycle L0 request queue") {
-    stall_and_wait(messageBufferFromL0_in, address);
+    stall_and_wait(Req1BufferFromL0_in, address);
   }
 
   action(z2_stallAndWaitL2Queue, "\z2", desc="recycle L2 request queue") {
@@ -980,646 +1428,1816 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   action(uu_profileHit, "\uh", desc="Profile the demand hit") {
     cache.profileDemandHit();
   }
+// add by gubiao  ACTION START 
 
-
-  //*****************************************************
-  // TRANSITIONS
-  //*****************************************************
-
-  // Transitions for Load/Store/Replacement/WriteBack from transient states
-  transition({IS, IM, IS_I, M_I, SM, SINK_WB_ACK, S_IL0, M_IL0, E_IL0, MM_IL0},
-             {Load, Store, L1_Replacement}) {
-    z0_stallAndWaitL0Queue;
+//EvictLocalBlk_R
+  action(send_changetodirtyfail_to_core, "", desc="lcpm send changetodirtyfail to core"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtyFail; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
   }
 
-  transition(I, Load, IS) {
-    oo_allocateCacheBlock;
-    ll_clearSharers;
-    nn_addSharer;
-    i_allocateTBE;
-    ss_recordGetSL0ID;
-    a_issueRdDataS;
-    uu_profileMiss;
+  action(send_changetodirtyfail_to_core_rsp, "", desc="lcpm send changetodirtyfail to core"  ){
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtyFail; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_changetodirtyfail_to_local_core, "", desc="lcpm send changetodirtyfail to local_core"  ){  
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(tbe));          
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtyFail; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender;
+          out_msg.DataBlk := in_msg.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_changetodirtyfail_to_local_core_gack, "", desc="lcpm send changetodirtyfail to local_core"  ){  
+    peek(responseNetwork_in, ResponseMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(tbe));          
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtyFail; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender;
+          out_msg.DataBlk := in_msg.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_changetodirtysuccess_to_core, "", desc="lcpm send changetodirtyfail to core"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtySuccess; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_changetodirtysuccess_to_local_core, "", desc="lcpm send changetodirtyfail to core"  ){
+    peek(responseNetwork_in, ResponseMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtySuccess; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := tbe.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_changetodirtysuccess_to_core_rq1, "", desc="lcpm send changetodirtyfail to core"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ChangeToDirtySuccess; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_readdatadirty_to_core, "", desc="lcpm send readdatadirty_ack to core after get nodatarsp"  ){
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ReadDataDirty; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_readdatadirty_to_core_rq1, "", desc="lcpm send readdatadirty_ack to core after get nodatarsp"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ReadDataDirty; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_readdatadirty_to_local_core, "", desc="lcpm send readdatadirty_ack to core after get nodatarsp"  ){ 
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:ReadDataDirty; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := tbe.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_putinvilad_to_core;, "", desc="lcpm send ack_"nodataresponse" to core"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:PutI; //置无效
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender;
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;        
+      }
+    }
+      cache.setMRU(address);
+      cache_entry.Sharers = machineID;    // 将TTAG中owner位中local核心对应位置无效    
+  }  
+
+  action(send_getdatainvalid_to_core, "", desc="pop_l0_rsp_queue"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:GetI; //取数置无效
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender;
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+     cache.setMRU(address);
+     cache_entry.Modifier = machineID;    // 将TTAG中owner位中local核心对应位置无效 // 前提是TTAG中显示脏在核心 M       
+  }
+
+  action(send_writecomplete_to_core_rsp, "", desc="pop_l0_rsp_queue"  ){
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:WriteComplete; //writecomplete
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender;
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }  
+
+
+  action(send_writecomplete_to_local_core, "", desc="pop_l0_rsp_queue"  ){
+    peek(rspBufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:WriteComplete; //writecomplete
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender;
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }  
+
+
+    action(send_release_to_core, "", desc="pop_l0_rsp_queue"  ){
+     peek(Req1BufferFromL0_in, CoherenceMsg) {
+       enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+           assert(is_valid(cache_entry));
+           out_msg.addr := address;
+           out_msg.Class := CoherenceClass:Release;
+           out_msg.Sender := machineID;
+           out_msg.Dest := in_msg.Sender;
+           out_msg.DataBlk := cache_entry.DataBlk;
+           out_msg.MessageSize := MessageSizeType:Response_Data;
+          }
+       }
+       cache.setMRU(address);
+       cache_entry.Sharers = machineID;  //将TTAG中owner位中loca核心对应位置无效         
+    }  
+
+  action(send_getr_to_core, "", desc="pop_l0_rsp_queue"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:GetR;
+          out_msg.Sender := machineID; 
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk; 
+          out_msg.MessageSize := MessageSizeType:Response_Data; 
+      }
+    }
+      cache.setMRU(address);
+      cache_entry.Modifier = machineID;  //将TTAG中owner位中loca核心对应位置无效      
+  }  
+
+  action(send_GetS_to_M_core, "", desc=""  ){  //5.5.3
+      peek(requestNetwork_in, RequestMsg) {
+      enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));  
+          out_msg.addr := address;  
+          out_msg.Class := CoherenceClass:GetS;
+          out_msg.Sender := machineID; 
+          out_msg.Dest   := cache_entry.Modifier;             
+          //out_msg.Dest   := createMachineID(MachineType:L0Cache, version);   
+          out_msg.DataBlk := cache_entry.DataBlk; 
+          out_msg.MessageSize := MessageSizeType:Response_Data; 
+      }
+    }
+      cache.setMRU(address); 
+  }  
+
+  action(send_readdatashare_to_local_core, "", desc=""  ){  //5.5.3
+      //peek(requestNetwork_in, RequestMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));  
+          out_msg.addr := address;  
+          out_msg.Class := CoherenceClass:ReadDataShare;
+          out_msg.Sender := machineID; 
+          //out_msg.Dest   := createMachineID(MachineType:L0Cache, version);   
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk; 
+          out_msg.MessageSize := MessageSizeType:Response_Data; 
+     // }
+    }
+      cache.setMRU(address); 
+  }  
+
+
+  action(send_readdata_to_core, "", desc=""  ){  //5.5.3
+      peek(Req1BufferFromL0_in, CoherenceMsg) { 
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));  
+          out_msg.addr := address;  
+          out_msg.Class := CoherenceClass:ReadData;
+          out_msg.Sender := machineID;  
+          out_msg.Dest := in_msg.Sender;
+          out_msg.DataBlk := cache_entry.DataBlk; 
+          out_msg.MessageSize := MessageSizeType:Response_Data; 
+      }
+    }
+      cache.setMRU(address); 
+  }  
+
+  action(send_readdata_to_local_core, "", desc=""  ){  //5.5.3
+      //peek(requestNetwork_in, RequestMsg) { //useless //change2023gub
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));  
+          out_msg.addr := address;  
+          out_msg.Class := CoherenceClass:ReadData;
+          out_msg.Sender := machineID; 
+          //out_msg.Dest   := createMachineID(MachineType:L0Cache, version);   
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk; 
+          out_msg.MessageSize := MessageSizeType:Response_Data; 
+      }
+    //}
+      cache.setMRU(address); 
+  }  
+
+
+  action(send_RspI_to_Gcpm, "", desc="向GCPM返回rspI"){   //need dvid
+    peek(requestNetwork_in,  RequestMsg)  {
+      enqueue(responseNetwork_out, ResponseMsg , l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RspI; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }
+
+  action(send_RdDataM_to_Gcpm, "", desc="向GCPM返回rddatam"){   //need dvid
+   // peek(requestNetwork_in,  RequestMsg)  {
+      enqueue(responseNetwork_out, ResponseMsg , l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RdDataM; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+   // }
+  }
+
+
+  action(send_RspS_to_Gcpm, "", desc="向GCPM返回rspS"){   //need dvid
+    peek(requestNetwork_in,  RequestMsg)  {
+      enqueue(responseNetwork_out, ResponseMsg , l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RspS; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }
+
+  action(send_RSPswb_to_Gcpm, "", desc="向GCPM返回rspSwb"){   //need dvid
+    peek(requestNetwork_in,  RequestMsg)  {
+      enqueue(responseNetwork_out, ResponseMsg , l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RspSWb; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }
+
+  action(send_RspIWb_to_Gcpm, "", desc="向GCPM返回全局回答RspIWb"){ 
+    peek(requestNetwork_in, RequestMsg) {
+      enqueue(responseNetwork_out,  ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RspIWb; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }
+
+  action(send_RSPswb_to_Gcpm_with_tcache_data, "", desc="向GCPM返回全局回答RspsWb"){ 
+    //peek(requestNetwork_in, RequestMsg) {
+      enqueue(responseNetwork_out,  ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RspIWb; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+     // }
+    }
+  }
+
+  action(send_WrDataNC_to_GCPM, "", desc="向GCPM返回全局回答RspsWb"){ 
+    //peek(requestNetwork_in, RequestMsg) {
+      enqueue(responseNetwork_out,  ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:WrDataNC; 
+        out_msg.DataBlk := cache_entry.DataBlk;
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+     // }
+    }
+  }
+
+
+  action(send_WbMtoI_to_Gcpm_without_data, "", desc="LCPM向Home GCPM发送全局请求WBMTOI,不携带数据"){
+      //peek(Req1BufferFromL0_in, CoherenceMsg) {      // 从核心来的inmsg
+      enqueue(requestNetwork_out, RequestMsg, l1_response_latency) {  //发往GCPM的buffer
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:WbMtoI; 
+        //out_msg.DataBlk := in_msg.DataBlk; // GRQ1不带数据
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      // }
+    }
+  }  
+
+  action(send_InvXtoI_toGcpm_without_data, "", desc="LCPM向 Home GCPM发送不带数据的全局请求INVXTOI"){
+      //peek(Req1BufferFromL0_in, CoherenceMsg) {      // 从核心来的inmsg     // 用不到in_msg，此action对于 5.12.2 的I和S情况是通用的
+      enqueue(requestNetwork_out, RequestMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:InvXtoI; 
+       //out_msg.DataBlk := cache_entry.DataBlk; // GRQ1 不带数据
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+   // }
+   } 
+
+  action(send_InvXtoM_toGcpm, "", desc="LCPM向 Home GCPM 发送INVXTOM的全局请求"){
+      peek(rspBufferFromL0_in, CoherenceMsg) {      // 从核心来的rsp    
+      enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:InvXtoM; 
+        //out_msg.DataBlk := cache_entry.DataBlk; // GRQ1 不带数据
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+   } 
+
+  action(store_the_data_from_ttag, "", desc="将数据从tcache中读出,存于淘汰缓冲"){
+      peek(Req1BufferFromL0_in, CoherenceMsg) {   
+      assert(is_valid(tbe));
+      tbe.DataBlk := cache_entry.DataBlk ;
+      }
+   }
+  action(store_the_data_from_inmsg, "", desc="将数据从inmsg中读出,存于淘汰缓冲"){
+      peek(rspBufferFromL0_in, CoherenceMsg) {      // 从核心来的inmsg
+      assert(is_valid(cache_entry));
+      tbe.DataBlk := in_msg.DataBlk ;
+    }
+  }
+
+  action(write_data_in_tcache, "", desc="将核心来的数据写入Tcache "){
+        peek(Req1BufferFromL0_in, CoherenceMsg) {
+        assert(is_valid(cache_entry));
+        cache_entry.DataBlk := in_msg.DataBlk;   
+        cache_entry.dirty := in_msg.dirty;           
+    }
+   }  
+
+  action(write_data_in_tcache_gcpm, "", desc="将GCP来的数据写入Tcache "){
+        peek(requestNetwork_in, RequestMsg) {
+        assert(is_valid(cache_entry));
+        cache_entry.DataBlk := in_msg.DataBlk;   
+        cache_entry.dirty := in_msg.dirty;           
+    }
+   }  
+
+  action(write_data_in_tcache_rsp, "", desc="将核心来的数据写入Tcache "){
+        peek(rspBufferFromL0_in, CoherenceMsg) {
+        assert(is_valid(cache_entry));
+        cache_entry.DataBlk := in_msg.DataBlk;   
+        cache_entry.dirty := in_msg.dirty;           
+    }
+   }  
+
+
+  action(send_putI_to_core_by_s_owner,"", desc="根据owner位向本die有副本的所有核心发送置无效请求"){
+     peek(Req1BufferFromL0_in, CoherenceMsg) {   
+     enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Type := CoherenceRequestType:PutI;
+      out_msg.Requestor := machineID;
+      out_msg.Destination := cache_entry.Sharers;      
+      out_msg.MessageSize := MessageSizeType:Response_Data;
+      }      
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_putI_to_core_by_m_owner,"", desc="根据owner位向本die有副本的所有核心发送置无效请求"){
+     peek(Req1BufferFromL0_in, CoherenceMsg) {   
+     enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Type := CoherenceRequestType:PutI;
+      out_msg.Requestor := machineID;
+      out_msg.Destination := cache_entry.Modifier;      
+      out_msg.MessageSize := MessageSizeType:Response_Data;
+      }      
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_putI_to_core_by_s_owner_grq,"", desc="根据owner位向本die有副本的所有核心发送置无效请求"){
+     peek(requestNetwork_in, RequestMsg) {   
+     enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Type := CoherenceRequestType:PutI;
+      out_msg.Requestor := machineID;
+      out_msg.Destination := cache_entry.Sharers;      
+      out_msg.MessageSize := MessageSizeType:Response_Data;
+      }      
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_RspI_or_RspIwb_to_Gcpm_by_flag, "", desc="根据淘汰缓冲条目特殊标志位向GCPM返回请求"){
+     peek(requestNetwork_in,  RequestMsg) { 
+      enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        if(tbe.Dirty) {     // 根据淘汰缓冲条目特殊标志位，//本代码中的dirty是这个标志位吗？
+         out_msg.Type := CoherenceResponseType:RspI; 
+        // out_msg.DataBlk := tbe.DataBlk; 
+        }
+        else {
+        out_msg.Type := CoherenceResponseType:RspIWb; 
+        out_msg.DataBlk := tbe.DataBlk; 
+        }
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }    
+
+
+  action(send_RspI_toGcpm_by_flag, "", desc="根据淘汰缓冲条目特殊标志位向GCPM返回请求"){
+     peek(requestNetwork_in,  RequestMsg) { 
+      enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        if(tbe.Dirty) {     // 根据淘汰缓冲条目特殊标志位，//需要数据的标志位随rspi返回给gcpm
+         out_msg.Type := CoherenceResponseType:RspI; 
+         out_msg.DataBlk := tbe.DataBlk; 
+         out_msg.Dirty := tbe.Dirty;
+        }
+        else {           //不需要数据的标志位随rspi返回给gcpm
+        out_msg.Type := CoherenceResponseType:RspI; 
+        out_msg.DataBlk := tbe.DataBlk; 
+        }
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }    
+
+
+  action(s_deallocateTBE, "s", desc="Deallocate TBE 释放淘汰缓冲") {  
+      if(is_valid(tbe)){
+          TBEs.deallocate(address); 
+          unset_tbe();
+      }
+  }
+  action(send_GetI_to_core_by_m_owner,"", desc="根据owner位向本die有副本的所有核心发送置无效请求"){
+     // peek(Req1BufferFromL0_in, CoherenceMsg) {    //because the inport is useless
+     enqueue(Rq2bufferToL0_out, CoherenceMsg, l1_response_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Type := CoherenceRequestType:GetI;
+      out_msg.Requestor := machineID;
+      out_msg.Destination := cache_entry.Modifier;        // ttag显示脏在核心，那就只有一个M核心有最新副本
+      out_msg.MessageSize := MessageSizeType:Response_Data;
+      }      
+     // }
+      cache.setMRU(address);   
+  }
+
+  action(clear_valid_in_ttag,"", desc=""){      
+     cache_entry.Modifier = machineID;    // 将TTAG中owner位中local核心对应位置无效       
+     cache_entry.Sharers  = machineID;    // 将TTAG中owner位中local核心对应位置无效         
+       }
+
+  action(send_putI_or_GetI_to_Core_by_TtagAndOwner,"", desc="根据TTAG状态及owner位发送置无效或取数置无效请求"){
+     peek(requestNetwork_in,  RequestMsg) {
+      enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        if( (getState(tbe, cache_entry, in_msg.addr) == State:S ) ||  (getState(tbe, cache_entry, in_msg.addr) == State:MM ) ) {      //根据TTAG状态及owner位发送置无效或取数置无效请求
+         out_msg.Type := CoherenceResponseType:PutI;  
+        }
+        else if { (getState(tbe, cache_entry, in_msg.addr) == State:M ) 
+        out_msg.Type := CoherenceResponseType:GetI; 
+        }
+        out_msg.DataBlk := cache_entry.DataBlk;         
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(in_msg.Requestor);
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+  }
+
+   // 5.13 
+  action(send_RequestComplete_to_req_core, "", desc="lcpm send RequestComplete to core"  ){
+    peek(Req1BufferFromL0_in, CoherenceMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:RequestComplete; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := in_msg.Sender; 
+          out_msg.DataBlk := in_msg.DataBlk;
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_RequestComplete_to_local_core, "", desc="lcpm send RequestComplete to local core"  ){
+    peek(responseNetwork_in, ResponseMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:RequestComplete; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.DataBlk := cache_entry.DataBlk;
+          out_msg.dirty := cache_entry.dirty;          
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+  action(send_RequestComplete_to_local_core_withoutdata, "", desc="lcpm send RequestComplete to local core"  ){
+    peek(responseNetwork_in, ResponseMsg) {
+      enqueue(AckbufferToL0_out, CoherenceMsg, l1_response_latency) {
+          assert(is_valid(cache_entry));
+          out_msg.addr := address;
+          out_msg.Class := CoherenceClass:RequestComplete; 
+          out_msg.Sender := machineID;
+          out_msg.Dest := tbe.Inmsg_Sender; 
+          out_msg.dirty := cache_entry.dirty;          
+          out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+    }
+      cache.setMRU(address);
+  }
+
+
+  action(send_RdDataS_to_gcpm, "", desc="LCPM向 Home GCPM发送不带数据的全局请求rddatas"){
+      //peek(Req1BufferFromL0_in, CoherenceMsg) {      // 从核心来的inmsg     // 用不到in_msg
+      enqueue(requestNetwork_out, RequestMsg, l1_response_latency) {
+        assert(is_valid(cache_entry));
+        out_msg.addr := address;
+        out_msg.Type := CoherenceResponseType:RdDataS; 
+       //out_msg.DataBlk := cache_entry.DataBlk; // GRQ1 不带数据
+        out_msg.Dirty := cache_entry.Dirty;
+        out_msg.Sender := machineID;
+        out_msg.Destination.add(mapAddressToMachine(address, MachineType:GCPM));
+        out_msg.MessageSize := MessageSizeType:Response_Data;
+      }
+   // }
+   } 
+
+
+// add by gubiao  ACTION END
+
+
+// add by gubiao transition START
+// add by gubiao transition START
+// add by gubiao transition START
+
+// 5.5 可cache读
+  //5.5.1 start  
+  transition({SS, EE, MM}, Load){         // 5.5.1  ReadBlkI/+dvic / ReadBlk/+dvic
+    oo_allocateCacheBlock;         //    
+    i_allocateTBE;                 //     
+    h_data_to_l0;                  // get RQ1 from local core and send ACK to local core          
+    nn_addSharer;                  // stag: I -> S 
+    ff_deallocateCacheBlock;       //   
+    s_deallocateTBE;               //        
+    uu_profileHit;                 // 
+    k_popL0RequestQueue;           // pop core req queue 
+  }
+
+  transition({S, SS, EE, MM}, Ifetch) {    // 5.5.1   fetchblki 
+    oo_allocateCacheBlock;         //    
+    i_allocateTBE;                 //     
+    h_instruction_to_l0;           // get RQ1 from local core and send ACK to local core  
+    //nn_addSharer;                // stag: I -> I 
+    ff_deallocateCacheBlock;       //   
+    s_deallocateTBE;               //
+    uu_profileHit;                 //   
+    k_popL0RequestQueue;           // pop core rsp queue  
+  }
+ //5.5.1 end
+
+  // 5.5.2  start 
+  transition(M, Load, MM_DL0  ) {   // 5.5.2    ReadBlk/+dvic / ReadBlki/+dvic
+    oo_allocateCacheBlock;      //    
+    i_allocateTBE;              //    
+    ss_recorinmsgL0ID;          // save "in_msg.Sender" in tbe      
+    a_issueGETS;                // get RQ1 from local core and send RQ2 to M core    
+    nn_addSharer;               // stag(C0): I -> S 
+    ss_recordGetXL0ID;          // 置owner位中local核心对应位有效 
+    uu_profileHit;              // 
+    k_popL0RequestQueue;        // pop core queue
+  }
+
+  transition(MM_DL0, DataResponse_Ack, MM) {  
+    u_writeDataFromL0Response;  // 将dataresponse的数据写入tcache，
+    hh_xdata_to_l0_local_core;  // get RSP from M core and send ACK to local core 
+    // kk_removeRspModifier_rsp;       // stag(C3)： M -> S
+    nn_addSharer_rsp;           // stag(C3)： M -> S
+    ff_deallocateCacheBlock;    //   
+    s_deallocateTBE;            //       
+    k_popL0RspQueue;            // Pop incoming queue
+    kd_wakeUpDependents; 
+  }
+
+  transition(M, Ifetch, MM_IL0) { // 5.5.2 fetchblki    
+    oo_allocateCacheBlock;      //    
+    i_allocateTBE;              //      
+    ss_recorinmsgL0ID;          // save "in_msg.Sender" in tbe        
+    a_issueGETS;                // get RQ1 from core and send RQ2 to M core   
+    //nn_addSharer;             // stag(C0): I -> I
+    ss_recordGetXL0ID;          // 置owner位中local核心对应位有效
+    uu_profileHit;
     k_popL0RequestQueue;
   }
 
-  transition(I, Ifetch, Inst_IS) {
-    oo_allocateCacheBlock;
-    ll_clearSharers;
-    nn_addSharer;
-    i_allocateTBE;
-    ss_recordGetSL0ID;
-    a_issueRdDataS;
-    uu_profileMiss;
-    k_popL0RequestQueue;
+  transition(MM_IL0, DataResponse_Ack, MM) {
+    u_writeDataFromL0Response;        // 将dataresponse的数据写入tcache，
+    hh_inxdata_to_l0_local_core;      // get RSP from core and send ACK to local core 
+    // kk_removeRspModifier_rsp;             // stag(C3)： M -> S    
+    nn_addSharer_rsp;                 // stag(C3)： M -> S
+    ff_deallocateCacheBlock;          //   
+    s_deallocateTBE;                  //        
+    k_popL0RspQueue;                  // Pop rsp queue
+    kd_wakeUpDependents; 
+  }
+  // 5.5.2  end
+
+ //5.5.3 start
+  transition(I, Load, IS) { // 5.5.3   readblki/+ dvic , readblk/+ dvic 
+    oo_allocateCacheBlock;  // 收集tcache内容 
+    ll_clearSharers;        // 因为TTAG是I，所以清除之前记录的sharers
+    nn_addSharer;           // STAG(C0): I -> S 
+    i_allocateTBE;          // 收集tbe内容
+    ss_recorinmsgL0ID;      // save "in_msg.Sender" in tbe        
+    ss_recordGetSL0ID;      // 向tbe中登记，相当于有第二个地方登记sharedes
+    a_issueRdDataS;         // get RQ1 from core and send GRQ1 to gcpm 
+    uu_profileMiss;         // 性能统计，反应cache与结构设计
+    k_popL0RequestQueue;    // pop core inqueue
   }
 
-  transition({I,IS}, RSPI){
-  //todo: issue RSPI to GCPM
-  l_popL2RequestQueue;
+  transition(I, Ifetch, Inst_IS) {   //5.5.3 fetchblki
+    oo_allocateCacheBlock;  // 收集tcache内容 
+    ll_clearSharers;        // 因为TTAG是I，所以清除之前记录的sharers
+    //nn_addSharer;         // stag(C0): I -> I 
+    i_allocateTBE;          // 收集tbe内容
+    ss_recorinmsgL0ID;      // save "in_msg.Sender" in tbe          
+    ss_recordGetSL0ID;      // 向tbe中登记，相当于有第二个地方登记sharedes
+    a_issueRdDataS;         // get RQ1 from core and send GRQ1 to gcpm 
+    uu_profileMiss;         // 性能统计，反应cache与结构设计
+    k_popL0RequestQueue;    // pop core inqueue
   }
 
-  transition({I,Inst_IS}, RSPI){
-  //todo: issue RSPI to GCPM
-  l_popL2RequestQueue;
+  transition(IS, RSPI_LOCAL){   // 5.5.3  local lcpm after get prbs do nothing
+  l_popL2RequestQueue;        // pop gcpm req queue
   }
 
-  transition(IS, ACKEDATA, EE){
-  //todo: put data into local cache line
-  //todo: response readdatashare
-  o_popL2ResponseQueue;
+  transition(Inst_IS, RSPI_LOCAL){ // 5.5.3  local lcpm after get prbs do nothing
+  l_popL2RequestQueue;           // pop gcpm req queue  
   }
 
-  transition(IS, ACKSDATA, S){
-  //todo: put data into local cache line
-  //todo: response readdatashare
-  o_popL2ResponseQueue;
+  transition(IS, ACKEDATA, EE){        // 5.5.3 步骤6 local lcpm after get ackedata  // readblki/+ dvic , readblk/+ dvic 
+  write_data_in_tcache_gcpm;           // 将数据写入tcache
+  send_readdatashare_to_local_core;    // get GACK from GCPM and send ACK to local core 
+  ff_deallocateCacheBlock;             // del cache entry
+  s_deallocateTBE;                     // del tbe
+  o_popL2ResponseQueue;                // pop GCPM GACK queue
+  }
+
+  transition(IS, ACKSDATA, S){         // 5.5.3 步骤6 local lcpm after get acksdata // readblki/+ dvic , readblk/+ dvic 
+   write_data_in_tcache_gcpm;          // 将数据写入tcache
+   send_readdatashare_to_local_core;   // get GACK from GCPM and send ACK to local core 
+   ff_deallocateCacheBlock;            // del cache entry
+   s_deallocateTBE;                    // del tbe
+   o_popL2ResponseQueue;               // pop GCPM GACK queue
   }
   
-  transition(Inst_IS, ACKEDATA, EE){
-  //todo: put data into local cache line
-  //todo: response readdata
-  o_popL2ResponseQueue;
+  transition(Inst_IS, ACKEDATA, EE){   // 5.5.3 步骤6 local lcpm after get ackedata //fetchblki
+  write_data_in_tcache_gcpm;           // 将数据写入tcache                                 
+  send_readdata_to_local_core;               // get GACK from GCPM and send ACK to core                                              
+  ff_deallocateCacheBlock;             // del cache entry                                                
+  s_deallocateTBE;                     // del tbe                                                          
+  o_popL2ResponseQueue;                // pop GCPM GACK queue                                             
   }
 
-  transition(Inst_IS, ACKSDATA, SS){
-  //todo: put data into local cache line
-  //todo: response readdata
-  o_popL2ResponseQueue;
+  transition(Inst_IS, ACKSDATA, SS){   // 5.5.3 步骤6 local lcpm after get ackedata  //fetchblki
+  write_data_in_tcache_gcpm;           // 将数据写入tcache                                                  
+  send_readdata_to_local_core;               // get GACK from GCPM and send ACK to core                                                   
+  ff_deallocateCacheBlock;             // del cache entry                                                  
+  s_deallocateTBE;                     // del tbe                                                   
+  o_popL2ResponseQueue;                // pop GCPM GACK queue                                                         
   }
 
-  //todo: ReadBlkMod+Dvic 
-  transition(I, Store_Miss, IM) {
-    oo_allocateCacheBlock;
-    i_allocateTBE;
-    b_issueGETX;
-    uu_profileMiss;
-    k_popL0RequestQueue;
+  // peer lcpm after get prbs START
+  transition(I, RSPI){ // 5.5.3  peer(i) after get prbs
+  send_RspI_to_Gcpm;             // get GRQ2 from gcpm and send GRSP to GCPM
+  l_popL2RequestQueue;           // pop gcpm req queue  
   }
 
-  //todo: ShareToDirty
-  transition(I,{Store_Core_Hit,Store_Miss}, IM_F) {
-    oo_allocateCacheBlock;
-    i_allocateTBE;
-    //todo: send RdDataM
-    //b_issueGETX;
-    uu_profileMiss;
-    k_popL0RequestQueue;
+  transition(S, RSPS) {    // 5.5.3 peer（s） lcpm after get prbs
+  send_RspS_to_Gcpm;       // peer lcpm get GRQ2 from gcpm and send GRSP to GCPM        
+  l_popL2RequestQueue;     // pop gcpm req queue 
   }
 
-  transition(IM_F, AckMData, M){
-    //todo: write data to L3 cache;
-    //todo: send ReadDataDirty to core;
-    //todo: update Modifier;
-    //todo: popGCPMresponsequeue;
+  transition(EE, RSPS, S) {   // 5.5.3 peer（EE） lcpm after get prbs
+  send_RspS_to_Gcpm;       // peer lcpm get GRQ2 from gcpm and send GRSP to GCPM       
+  l_popL2RequestQueue;     // pop gcpm req queue 
   }
 
-  transition(I, Inv) {
-    fi_sendInvAck;
-    l_popL2RequestQueue;
+  transition(MM, RSPSWB, S){  // 5.5.3  peer(MM) lcpm after get prbs
+    send_RSPswb_to_Gcpm;   // peer lcpm get GRQ2 from gcpm and send GRSP to GCPM     
+    l_popL2RequestQueue;   // pop gcpm req queue  
   }
 
-  // Transitions from Shared
-  transition(S, Load) {
-    h_data_to_l0;
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
+  transition(M, RSPSWB, MMD){   // 5.5.3  peer(M) lcpm after get prbs
+    oo_allocateCacheBlock;      // 
+    send_GetS_to_M_core;        // peer lcpm get GRQ2 from gcpm and send RQ2 to core 
+    l_popL2RequestQueue;        // pop gcpm req queue      
   }
 
-//share to dirty, core hit
-  transition({S,SS}, Store_Core_Hit, SMA) {
-    //todo: send putinv to shareders
-    //todo: poprequestqueue
+  transition(MMD, DataResponse_Ack, S ){    // 5.5.3  peer(M) lcpm after get prbs
+    u_writeDataFromL0Response;              // 将数据存入tcache
+    //stag M -> S // needchange
+    send_RSPswb_to_Gcpm_with_tcache_data;   // peer lcpm get RSP from core and send GRSP to GCPM
+    ff_deallocateCacheBlock;                // del tcache     
+    k_popL0RspQueue;                        // pop core queue
   }
-//readblkmod+dvic, core write miss
-  transition({S,SS}, Store_Hit_S, SSMA) {
-    //todo: send putinv to shareders
-    //todo: poprequestqueue
+  // peer lcpm after get prbs END
+
+
+ //5.5.3 end
+
+// 5.6 可cache写
+ //5.6.1 start
+  transition({EE,MM}, Store_Hit_MM, MA1) {  // 5.6.1 readblkmod/+dvic 
+   oo_allocateCacheBlock;               //    
+   i_allocateTBE;                       //    
+   send_readdatadirty_to_core_rq1;      // get rq1 from local core and send ACK to local core 
+   ll_clearSharers_ownercore;           // stag(C0): I/S -> M   
+   nn_putModifier;                      // stag(C0): I/S -> M   
+   ff_deallocateCacheBlock;             //   
+   s_deallocateTBE;                     //         
+   k_popL0RequestQueue;                 // pop core queue 
   }
 
+  transition({EE,MM}, Store_Core_Hit, MA2){  // 5.6.1 shareToDirty 
+   oo_allocateCacheBlock;                    //    
+   i_allocateTBE;                            //      
+   send_changetodirtysuccess_to_core_rq1;    // get rq1 from local core and send ACK to local core 
+   ll_clearSharers_ownercore;                // stag(C0): I/S -> M  
+   nn_putModifier;                           // stag(C0): I/S -> M      
+   ff_deallocateCacheBlock;                  //   
+   s_deallocateTBE;                          //     
+   k_popL0RequestQueue;                      // pop core queue 
+  }
+
+ //5.6.1 end
+
+
+ //5.6.2 start 
+  //ttag为脏在核心时，核心不会发sharetodirty 
+  transition(M, Store_Hit_M, MD){   // 5.6.2 readblkmod/+dvic
+   oo_allocateCacheBlock;           //    
+   i_allocateTBE;                   //     
+   ss_recorinmsgL0ID;               // save "in_msg.Sender" in tbe      
+   send_GetI_to_core_by_m_owner;    // get RQ1 from local core and send RQ2 to M core 
+   ll_clearSharers_ownercore;       // stag (C0): I/S -> M     
+   nn_putModifier_ownercore;        // stag (C0): I/S -> M , 告诉LCPM，脏在local core 0
+   k_popL0RequestQueue;             // pop req queue 
+  }
+
+  transition(MD, DataResponse_Ack, M){  
+   // ll_clearModifier_ownercore_rsp;     // stag（C3） : M -> I  , 告诉LCPM，core3的M被清掉了 
+   send_readdatadirty_to_local_core;   // get RSP from M core and send ACK to local core  
+   ff_deallocateCacheBlock;            //   
+   s_deallocateTBE;                    //      
+   k_popL0RspQueue;                    // pop rsp queue      
+  }
+ //5.6.2 end
+
+
+ // 5.6.3 start
+ //share to dirty, core hit
+  transition({S,SS}, Store_Core_Hit, SMA) { // 5.6.3 sharetodirty 
+    oo_allocateCacheBlock;               //      
+    i_allocateTBE;                       // 
+    ss_recorinmsgL0ID ;                  // save "in_msg.Sender" in tbe    
+    send_putI_to_core_by_s_owner;        // get REQ1 from local core and send REQ2 to S core 
+    ll_clearSharers;                     // 置无效系统中其他共享副本
+    nn_putModifier_ownercore;            // stag （C0）： I/S -> M , 告诉LCPM，脏在local core
+    k_popL0RequestQueue;                 // pop core req queue 
+  }
   transition(SMA, NoDataResponse_Ack, SMA_F) {
-    //todo: send InvXtoM to GCPM
-    //todo: pop request to core queue;
+    send_InvXtoM_toGcpm;                 // get RSP from core and send GRQ1 to GCPM
+    k_popL0RspQueue;                     // pop core queue 
   }
-
-  transition(SSMA, NoDataResponse_Ack, SSMA_F){
-    //todo: send InvXtoM to GCPM
-    //todo: pop request to core queue;
-  }
-
-  transition(SMA_F, AckCpl, M) {
-    //todo: send ReadDataDirty 
-    //todo: updata modified core
-    //todo: send ChangeDirtySucess to request core
-    //todo: pop gcpm response queue;
+  transition(SMA_F, PrbI_R, SMA_F1 ) {   // PrbI_R trigered when local LCPM get prbi
+    send_RspI_toGcpm_by_flag;            // get GRQ2 from GCPM and send GRSP to GCPM 
+    l_popL2RequestQueue;                 // pop GRQ2 queue 
+  }  
+  transition(SMA_F1, AckCpl_R, M ) {
+    send_changetodirtysuccess_to_local_core;   // get GACK from GCPM and send ack to core 
+    ff_deallocateCacheBlock;             //         
+    s_deallocateTBE;                     // 
+    o_popL2ResponseQueue;                // pop GACK queue
+  }   
+  transition(SMA_F1, AckMData_R, M ) {
+    send_changetodirtysuccess_to_local_core;   // get GACK from GCPM and send ack to core 
+    ff_deallocateCacheBlock;             //       
+    s_deallocateTBE;                     // 
+    o_popL2ResponseQueue;                // pop GACK queue
   }  
 
-  transition(SSMA_F, AckCpl, M) {
-    //todo: send ReadDataDirty 
-    //todo: updata modified core
-    //todo: send ReadDataDirty to request core
-    //todo: pop gcpm response queue;
+  //readblkmod+dvic, core write miss
+  transition({S,SS}, Store_Hit_S, SSMA) { // 5.6.3 readblkmod+dvic
+    oo_allocateCacheBlock;               //        
+    i_allocateTBE;                       // 
+    ss_recorinmsgL0ID ;                  // save "in_msg.Sender" in tbe       
+    send_putI_to_core_by_s_owner;        // get REQ1 from local core and send REQ2 to S core  
+    ll_clearSharers;                     // 置无效系统中其他共享副本
+    nn_putModifier_ownercore;            // stag （C0）： I/S -> M , 告诉LCPM，脏在local core 0    
+    k_popL0RequestQueue;                 // pop core queue
+  }
+  transition(SSMA, NoDataResponse_Ack, SSMA_F){ 
+    send_InvXtoM_toGcpm;                 // get RSP from core and send GRQ1 to GCPM
+    k_popL0RequestQueue;                 // pop core queue 
+  }
+  transition(SSMA_F, PrbI_R, SSMA_F1 ) { // PrbI_R trigered when local LCPM get prbi
+    send_RspI_toGcpm_by_flag;            // get GRQ2 from GCPM and send GRSP to GCPM 
+    l_popL2RequestQueue;                 // pop GRQ2 queue 
+  }  
+  transition(SSMA_F1, AckCpl_R, M ) {      
+    send_readdatadirty_to_local_core;          // get GACK from GCPM and send ack to core 
+    ff_deallocateCacheBlock;             //         
+    s_deallocateTBE;                     // 
+    o_popL2ResponseQueue;                // pop GACK queue
+  }  
+  transition(SSMA_F1, AckMData_R, M ) {
+    send_readdatadirty_to_local_core;          // get GACK from GCPM and send ack to core 
+    ff_deallocateCacheBlock;             //         
+    s_deallocateTBE;                     // 
+    o_popL2ResponseQueue;                // pop GACK queue
   }  
 
-  transition(SS, PrbI, I) {
-  //todo: send RspI to GCPM;
-  //todo: pop gcpm request queue;
-  }
-
-  transition(S, PrbI, SI) {
-  //todo: send PutInv to sharders;
-  //todo: pop gcpm request queque;
-  }
-
-  transaction(SI, NoDataResponse_Ack, I){
-  //todo: send RspI to GCPM;
-  //todo: pop gcpm request queue;
-  }
-
-  transition(M, PrbI, MI_F){
-  //todo: send PutInv to modified core; 
-  //todo: pop gcpm request queue;
-  }
-
-  transition(MI_F, NoDataResponse_Ack, I){
-  //todo: send RspIWb to GCPM; 
-  //todo: pop core response queue;
-  }
-
-  transition(MM, PrbI, I){
-  //todo: send RspI to GCPM; 
-  //todo: pop gcpm request queue;
-  }
-
-  transition(SS, Load){
-    h_data_to_l0;
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(S, Ifetch) {
-    h_instruction_to_l0;
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(SS, Ifetch) {
-    h_instruction_to_l0;
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(S, RSPS) {
-  //todo: send RspS to GCPM
-  //todo: popL2requestqueue;
-  }
-
-  transition(SS, RSPS) {
-  //todo: send RspS to GCPM
-  //todo: popL2requestqueue;
-  }
-
-  transition({S,SS}, Store, SM) {
-    i_allocateTBE;
-    c_issueUPGRADE;
-    uu_profileMiss;
-    k_popL0RequestQueue;
-  }
-
-  transition(SS, L1_Replacement, I) {
-    ff_deallocateCacheBlock;
-  }
-
-  transition(S, L0_Invalidate_Own, S_IL0) {
-    forward_eviction_to_L0_own;
-  }
-
-  transition(S, L0_Invalidate_Else, S_IL0) {
-    forward_eviction_to_L0_else;
-  }
-
-  transition(SS, Inv, I) {
-    fi_sendInvAck;
-    ff_deallocateCacheBlock;
-    l_popL2RequestQueue;
-  }
-
-  // Transitions from Exclusive
-  transition({EE,MM}, Store_Hit_MM, MA) {
-   //todo: send PutInv to shader cores;
-    k_popL0RequestQueue;
-  }
-
-  //if M in core, other core can't be S, so core will not issue sharetodirty(issue readblkmod+DVic);
-  transition(MM, Store_Core_Hit, MA){
-  //todo: set modifer core id;
-  //todo: send send PutInv to shader cores;
-    k_popL0RequestQueue;
-  }
-
-  //Resonse from putInv
-  transition(MA, NoDataResponse_Ack, M){
-   //todo: set modifier core id;
-   //todo: send ChangetoDirtySuccess; 
-   //pop queue
-  }
-
-  transition(M, Store_Hit_M, MD){
-   //todo: send GetInv to Modifier core;
-    k_popL0RequestQueue;
-  }
-
-  transition(MD, DataResponse_Ack, M){
-   //todo: update modifier core id;
-   //todo: send ReadDataDirty->ReadBlkMod+DVic to request core;
-   //popqueue;
-  }
-
-  transition(EE, PrbI, I) {
-  //todo: send RspI to GCPM; 
-  //todo: pop gcpm request queue;
-  } 
-  transition(EE, L1_Replacement, M_I){
-    // silent E replacement??
-    i_allocateTBE;
-    g_issuePUTX;   // send data, but hold in case forwarded request
-    ff_deallocateCacheBlock;
-  }
-
-  transition(EE, Inv, I) {
-    // don't send data
-    fi_sendInvAck;
-    ff_deallocateCacheBlock;
-    l_popL2RequestQueue;
-  }
-
-  transition(EE, Fwd_GETX, I) {
-    d_sendDataToRequestor;
-    ff_deallocateCacheBlock;
-    l_popL2RequestQueue;
-  }
-
-  transition(EE, Fwd_GETS, SS) {
-    d_sendDataToRequestor;
-    d2_sendDataToL2;
-    l_popL2RequestQueue;
-  }
-
-  transition(E, L0_Invalidate_Own, E_IL0) {
-    forward_eviction_to_L0_own;
-  }
-
-  transition(E, L0_Invalidate_Else, E_IL0) {
-    forward_eviction_to_L0_else;
-  }
-
-  transaction(MM, RSPSWB){
-//todo : issue RSPSWB to GCPM sender (with data)
-//todo : pop gcpm requestqueue
-  }
-
-  transaction(M, RSPSWB, MMD){
-//todo : issue GETS to M core
-  }
-
-  transaction(MMD, DataResponse, MM_G){
-//todo: get data from DataResponse, put into Tcache and set dirty
-  }
-
-  transaction(MM_G, RSPSWB, MM){
-//todo : issue RSPSWB with data to GCPM sender
-//todo : pop gcpm requestqueue
-  }
-
-  // Transitions from Modified
-  transition(MM, L1_Replacement, M_I) {
-    i_allocateTBE;
-    g_issuePUTX;   // send data, but hold in case forwarded request
-    ff_deallocateCacheBlock;
-  }
-
-  transition({M,E}, WriteBack, MM) {
-    u_writeDataFromL0Request;
-    k_popL0RequestQueue;
-  }
-
-  transition(M_I, WB_Ack, I) {
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    ff_deallocateCacheBlock;
-    kd_wakeUpDependents;
-  }
-
-  transition(MM, Inv, I) {
-    f_sendDataToL2;
-    ff_deallocateCacheBlock;
-    l_popL2RequestQueue;
-  }
-
-  transition(M_I, Inv, SINK_WB_ACK) {
-    ft_sendDataToL2_fromTBE;
-    l_popL2RequestQueue;
-  }
-
-  transition(MM, Fwd_GETX, I) {
-    d_sendDataToRequestor;
-    ff_deallocateCacheBlock;
-    l_popL2RequestQueue;
-  }
-
-  transition(MM, Fwd_GETS, SS) {
-    d_sendDataToRequestor;
-    d2_sendDataToL2;
-    l_popL2RequestQueue;
-  }
-
-  transition(M, L0_Invalidate_Own, M_IL0) {
-    forward_eviction_to_L0_own;
-  }
-
-  transition(M, L0_Invalidate_Else, M_IL0) {
-    forward_eviction_to_L0_else;
-  }
-
-  transition(M_I, Fwd_GETX, SINK_WB_ACK) {
-    dt_sendDataToRequestor_fromTBE;
-    l_popL2RequestQueue;
-  }
-
-  transition(M_I, Fwd_GETS, SINK_WB_ACK) {
-    dt_sendDataToRequestor_fromTBE;
-    d2t_sendDataToL2_fromTBE;
-    l_popL2RequestQueue;
-  }
-
-  // Transitions from IS
-  transition({IS,IS_I}, Inv, IS_I) {
-    fi_sendInvAck;
-    l_popL2RequestQueue;
-  }
-
-  transition(IS, Data_all_Acks, S) {
-    u_writeDataFromL2Response;
-    h_data_to_l0;
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS_I, Data_all_Acks, I) {
-    u_writeDataFromL2Response;
-    h_stale_data_to_l0;
-    s_deallocateTBE;
-    ff_deallocateCacheBlock;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS, DataS_fromL1, S) {
-    u_writeDataFromL2Response;
-    j_sendUnblock;
-    h_data_to_l0;
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS_I, DataS_fromL1, I) {
-    u_writeDataFromL2Response;
-    j_sendUnblock;
-    h_stale_data_to_l0;
-    s_deallocateTBE;
-    ff_deallocateCacheBlock;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  // directory is blocked when sending exclusive data
-  transition({IS,IS_I}, Data_Exclusive, E) {
-    u_writeDataFromL2Response;
-    hh_xdata_to_l0;
-    jj_sendExclusiveUnblock;
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  // Transitions from IM
-  transition(IM, Inv, IM) {
-    fi_sendInvAck;
-    l_popL2RequestQueue;
-  }
-
-  transition(IM, Data, SM) {
-    u_writeDataFromL2Response;
-    q_updateAckCount;
-    o_popL2ResponseQueue;
-  }
-
-  transition(IM, Data_all_Acks, M) {
-    u_writeDataFromL2Response;
-    hh_xdata_to_l0;
-    jj_sendExclusiveUnblock;
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition({SM, IM}, Ack) {
-    q_updateAckCount;
-    o_popL2ResponseQueue;
-  }
-
-  transition(SM, Ack_all, M) {
-    jj_sendExclusiveUnblock;
-    hh_xdata_to_l0;
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(SM, {Inv,L0_Invalidate_Else}, SM_IL0) {
-    forward_eviction_to_L0_else;
-  }
-
-  transition(SINK_WB_ACK, Inv){
-    fi_sendInvAck;
-    l_popL2RequestQueue;
-  }
-
-  transition(SINK_WB_ACK, WB_Ack, I){
-    s_deallocateTBE;
-    o_popL2ResponseQueue;
-    ff_deallocateCacheBlock;
-    kd_wakeUpDependents;
-  }
-
-  transition({M_IL0, E_IL0}, WriteBack, MM_IL0) {
-    u_writeDataFromL0Request;
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition({M_IL0, E_IL0}, L0_DataAck, MM) {
-    u_writeDataFromL0Response;
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition({M_IL0, MM_IL0}, L0_Ack, MM) {
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(E_IL0, L0_Ack, EE) {
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(S_IL0, L0_Ack, SS) {
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(SM_IL0, L0_Ack, IM) {
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition({S_IL0, M_IL0, E_IL0, SM_IL0, SM}, L0_Invalidate_Own) {
-    z0_stallAndWaitL0Queue;
-  }
-
-  transition({S_IL0, M_IL0, E_IL0, SM_IL0}, L0_Invalidate_Else) {
-    z2_stallAndWaitL2Queue;
-  }
-
-  transition({S_IL0, M_IL0, E_IL0, MM_IL0}, {Inv, Fwd_GETX, Fwd_GETS}) {
-    z2_stallAndWaitL2Queue;
-  }
-
-  // hardware transactional memory
-
-  // If a transaction has aborted, the L0 could re-request
-  // data which is in E or EE state in L1.
-  transition(EE, Load, EE) {
-    h_data_to_l0
-    nn_addSharer;
-   //ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(EE, Ifetch, EE) {
-    h_instruction_to_l0;
-    nn_addSharer;
-   // ss_recordGetSL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
+ // 5.6.3 end
+
+ // 5.6.4 START
+  transition(I, {Store_Core_Hit,Store_Miss}, II_M) { 
+    oo_allocateCacheBlock;               //    
+    i_allocateTBE;                       //        
+    send_RdDataM_to_Gcpm;                // get REQ1 from local core and send GRQ1 to GCPM   
+    ll_clearSharers_ownercore;           // stag （C0）： I/S -> M , 清除sharers
+    nn_putModifier_ownercore;            // stag （C0）： I/S -> M , 告诉LCPM，脏在local core 0        
+    uu_profileMiss;                      //        
+    k_popL0RequestQueue;                 // pop core queue   
+  }
+
+  transition(II_M, PrbI_R) {             // local lcpm after get prbi
+    send_RspI_toGcpm_by_flag;            // get GRQ2 from GCPM and send GRSP to gcpm
+    l_popL2RequestQueue;                 // pop GRQ2 queue 
+  }
+
+  transition(II_M, AckMData, M) {
+    write_data_in_tcache_gcpm;           // 将收到的数据写入tcache 
+    send_readdatadirty_to_local_core;    // get GACK from GCPM and send ACK to local core 
+    ff_deallocateCacheBlock;             //   
+    s_deallocateTBE;                     // 
+    o_popL2ResponseQueue;                // pop GACK queue 
+  }  
+ // 5.6.4 END
+
+
+// 5.9 EvictLocalBlk_R
+  //5.9.1 START 
+   transition(I,  EvictLocalBlk_R1){
+      oo_allocateCacheBlock;             //    
+      i_allocateTBE;                     //  
+      // kk_removeRequestModifier;          // STAG: M -> I
+      send_changetodirtyfail_to_core;    // get RQ1 from local core and send ACK to local core
+      ff_deallocateCacheBlock;           //   
+      s_deallocateTBE;                   //       
+      k_popL0RequestQueue;               // pop core queue 
+   }
+  //5.9.1 END
+
+  //5.9.2 START
+   transition({EE, S, MM},  EvictLocalBlk_R2, Evic_nodata){
+    oo_allocateCacheBlock;              //    
+    i_allocateTBE;                      //      
+    // kk_removeRequestModifier;           // STAG: M -> I    
+    send_putinvilad_to_core;            // get RQ1 from local core and send RQ2 to local core
+    k_popL0RequestQueue;                // pop core queue     
+   }
+   transition(Evic_nodata,  NoDataResponse_Ack,{EE, S, MM},){ 
+    send_changetodirtyfail_to_core_rsp;     // get RSP from core and send ACK to core
+    ff_deallocateCacheBlock;                //   
+    s_deallocateTBE;                        //       
+    k_popL0RspQueue;                        // pop core rsp  queue  
+   }
+  //5.9.2 END
+
+
+
+  //5.9.3 START
+   EVENT EvictLocalBlk_R3 ( MachineID requestor , Entry cache_entry) {
+     if(requestor!= cache_entry.Modifier) {
+      return Event:EvictLocalBlk_R3_1; //直接返回changetodirty响应 // for 5.9.1
+     }
+     else {
+      return Event:EvictLocalBlk_R3_2;   //向核心发送“取数置无效”请求，{等待核心返回“dataresponse”回答，}，将TTAG中owner位中local核心对应位置无效 //for 5.9.3
+     }
+   }
+   transition(M,  EvictLocalBlk_R3_1){   // 5.9.1 
+    oo_allocateCacheBlock;               //    
+    i_allocateTBE;                       //    
+    // kk_removeRequestModifier;            // STAG: M -> I        
+    send_changetodirtyfail_to_core;      // get RQ1 from local core and send ACK to local core 
+    ff_deallocateCacheBlock;             //   
+    s_deallocateTBE;                     //      
+    k_popL0RequestQueue;                 // pop core req queue 
+   }
+   transition(M,  EvictLocalBlk_R3_2, Evic_data){  // 5.9.3 
+     oo_allocateCacheBlock;              //    
+     i_allocateTBE;                      //       
+     // kk_removeRequestModifier;           // STAG: M -> I         
+     send_getdatainvalid_to_core;        // get RQ1 from local core and send RQ2 to local core
+     k_popL0RequestQueue;                // pop core req queue 
+   }
+   transition(Evic_data, DataResponse_Ack, MM){ //收到“nodataresponse”回答后，向核心返回changetodirtyfail响应  
+     send_changetodirtyfail_to_core_rsp;     // get RSP from local core and send ack to local core 
+     ff_deallocateCacheBlock;                //   
+     s_deallocateTBE;                        //       
+     k_popL0RspQueue;                        // pop core rsp queue 
+   }
+  //5.9.3 END
+
+// 5.10 核心cache写回 WrVictimBlk_R
+  //5.10.1  START 
+   transition({I, MM, S, EE},  WrVictimBlk_R1, Wvic_M1){
+    oo_allocateCacheBlock;              //    
+    i_allocateTBE;                      //         
+    // kk_removeRequestModifier;           // STAG: M -> I             
+    send_release_to_core;               // get RQ1 from core and send RQ2 to core
+    k_popL0RequestQueue;                // pop core queue     
+   }
+   transition(Wvic_M1, NoDataRe ponse_Ack , {I, MM, S, EE} ){
+    send_writecomplete_to_core_rsp;     // get RSP from core and send ack to core 
+    ff_deallocateCacheBlock;            //   
+    s_deallocateTBE;                    //       
+    k_popL0RspQueue;                    // pop core queue 
+   }
+  //5.10.1  END
+
+
+  //5.10.2 START
+  transition(M,  WrVictimBlk_R2, Wvic_M2){
+    oo_allocateCacheBlock;              //    
+    i_allocateTBE;                      //         
+    // kk_removeRequestModifier;           // STAG: M -> I    
+    send_getr_to_core;                  // get RQ1 from local core and send RQ2 to local core
+    k_popL0RequestQueue;                // pop core queue     
+  }
+  transition(Wvic_M2, DataResponse_Ack , MM){
+    write_data_in_tcache_rsp;           // 将数据存入tcache
+    send_writecomplete_to_core_rsp;     // get RSP from core and send ack to local core 
+    ff_deallocateCacheBlock;            //   
+    s_deallocateTBE;                    //       
+    k_popL0RspQueue;                    // pop core queue 
+  }  
+
+// 5.11 EvictECacheBlk_R
+ //5.11.1 START
+  transition(I,  EvictECacheBlk_R1){
+    oo_allocateCacheBlock;              //    
+    i_allocateTBE;                      //   
+    send_changetodirtyfail_to_core;     // get RQ1 from local core and send ACK to local core 
+    ff_deallocateCacheBlock;            //   
+    s_deallocateTBE;                    //          
+    k_popL0RequestQueue;                // pop core queue 
+  }
+ //5.11.1 END
+
+ //5.11.2
+  transition({S, EE},  EvictECacheBlk_R2, Evic_ecache_M1){
+    oo_allocateCacheBlock;                    //    
+    i_allocateTBE;                            //       
+    ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe
+    send_putI_to_core_by_s_owner;             // get RQ1 from local core and send RQ2 to S core 
+    k_popL0RequestQueue;                      // pop core queue     
+  }
+  transition(Evic_ecache_M1 ,NoDataResponse_Ack ){
+    // kk_removeRspModifier_rsp;                  // STAG: * -> I   
+    ll_clearSharers_ownercore_rsp;             // STAG: * -> I       
+    q_updateAckCount;                          // 收集核心发过来的nodataresponse_ack  
+    k_popL0RspQueue;                           // pop core queue  //会不会导致统计不上，//应该不会，统计完才pop的    
+  }  
+  transition(Evic_ecache_M1 ,NoDataResponse_Ack_all , I){  
+    // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+    ll_clearSharers_ownercore_rsp;            // STAG: * -> I   
+    send_changetodirtyfail_to_local_core;     // 收齐nodataresponse之后，向local核心返回changetodirtyfail响应            
+    ff_deallocateCacheBlock;                  //   
+    s_deallocateTBE;                          //         
+    k_popL0RspQueue;                          // pop core queue       
+  }
+
+
+ //5.11.3
+  transition(MM,  EvictECacheBlk_R3, Evic_ecache_M2){ 
+    oo_allocateCacheBlock;                    //    
+    i_allocateTBE;                            //       
+    ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe    
+    store_the_data_from_ttag;                 // 
+    send_putI_to_core_by_s_owner;             // get RQ1 from local core and send RQ2 to s core 
+                                              // 脏在Tcache，所以核心一定不会是M，那就是有副本的核心一定是S，所以需要往Sharers中发    //// 对开呢？
+    k_popL0RequestQueue;                      // pop core req queue          
+   }
+
+  transition(Evic_ecache_M2,  NoDataResponse_Ack){    // tr ansaction  to update count
+    // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+    ll_clearSharers_ownercore;                // STAG: * -> I         
+    q_updateAckCount;                         // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+    k_popL0RspQueue;                          // pop core rsp queue     
+  }
+  transition(Evic_ecache_M2,  NoDataResponse_Ack_all, Evic_I){
+    // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+    ll_clearSharers_ownercore;                // STAG: * -> I       
+    send_WbMtoI_to_Gcpm_without_data;         // get RSP from core and send GRQ1 to GCPM    
+    k_popL0RspQueue;                         // pop core queue   
+   }
+    // useful for 5.11.3 && 5.11.4 && 5.12.3 && 5.12.4 ---START 
+    // useful for 5.11.3 && 5.11.4 && 5.12.3 && 5.12.4 ---START      
+  transition(Evic_I,  PrbI_R, Evic_ecache_M2_1){ //PrbI 
+      send_RspI_or_RspIwb_to_Gcpm_by_flag;    // local LCPM get GRQ2 from GCPM and send GRSP to GCPM
+      l_popL2RequestQueue;                    // 排空来自GCPM的请求队列
+   }
+  transition(Evic_ecache_M2_1, AckCpl_R, I){ // AckCpl // need in GCPM
+    send_changetodirtyfail_to_local_core_gack;     // get GACK from GCPM and send ACK to local core 
+    ff_deallocateCacheBlock;                       //   
+    s_deallocateTBE;                               //       
+    o_popL2ResponseQueue;                          // 排空来自GCPM的ACK队列 
+   }     
+    // useful for 5.11.3 && 5.11.4 && 5.12.3 && 5.12.4 ---END
+    // useful for 5.11.3 && 5.11.4 && 5.12.3 && 5.12.4 ---END
+
+ //5.11.4 START 
+  transition(M,  EvictECacheBlk_R4, Evic_ecache_M3){   
+    oo_allocateCacheBlock;                    //    
+    i_allocateTBE;                            //  
+    ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe          
+    send_GetI_to_core_by_m_owner;             // get RQ1 from core and send RQ2 to core // 脏在核心，有副本的就是M 
+    k_popL0RequestQueue;                      // 排空 核心 req queue  
+  }
+  transition(Evic_ecache_M3,  DataResponse_Ack, Evic_I){
+    store_the_data_from_inmsg;                //
+    send_WbMtoI_to_Gcpm_without_data;         // get RSP from core and send GRQ1 to GCPM
+    k_popL0RspQueue;                          // 排空 核心rsp queue  
+  }
+  //the left same as 5.11.3 
+  //the left same as 5.11.3 
+ //5.11.4 END
+
+// 5.12 EvictGlobalBlk_R 
+   //5.12.1 
+    transition(EE,  EvictGlobalBlk_R1, Evic_Global_M1){
+    oo_allocateCacheBlock;                    //    
+    i_allocateTBE;                            //  
+    ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe     
+    send_putI_to_core_by_s_owner;             // get RQ1 from core and send RQ2 to core  //TTAG是清洁独占，所以不可能是脏在核心，核心不会有M态。
+    k_popL0RequestQueue;                      // 排空 core req queue      
+    }
+    transition(Evic_Global_M1,  NoDataResponse_Ack){    // transition  to update count
+    // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+    ll_clearSharers_ownercore;                // STAG: * -> I         
+    q_updateAckCount;                         // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+    k_popL0RspQueue;                          // pop core rsp queue     
+    }    
+    transition(Evic_Global_M1, NoDataResponse_Ack_all , I){   
+    send_changetodirtyfail_to_local_core;     // get all RSP from core and send ACK to local core
+    ff_deallocateCacheBlock;                  //   
+    s_deallocateTBE;                          //       
+    k_popL0RspQueue;                          // pop core rsp queue   
+      }
+
+  //5.12.2
+   //5.12.2 I情况下 
+    transition(I,  EvictGlobalBlk_R2, Evic_Global_I_M2){ 
+      oo_allocateCacheBlock;                   //    
+      i_allocateTBE;                           //  
+      ss_recorinmsgL0ID ;                      // save "in_msg.Sender" in tbe    
+      send_InvXtoI_toGcpm_without_data;        // get RQ1 from local core and send GRQ1 to GCPM 
+      k_popL0RequestQueue;                     // pop core queue   
+      }
+    transition(Evic_Global_I_M2, PrbI_R, Evic_Global_M2_1 ){ 
+      l_popL2RequestQueue;                     // pop GCPM queue // get GRQ2 from GCPM and do nothing wait the ACKCPL
+      }   
+    transition(Evic_Global_M2_1, AckCpl_R , I ){
+     send_changetodirtyfail_to_local_core_gack;     // get GACK from GCPM and send ack to local core 
+     ff_deallocateCacheBlock;                       //   
+     s_deallocateTBE;                               //      
+     o_popL2ResponseQueue;                          // pop GCPM GACK queue 
+     }       
+   //5.12.2 S情况下
+    transition(S,  EvictGlobalBlk_R2, Evic_Global_S_M2){ //步骤3
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //  
+     ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe    
+     send_putI_to_core_by_s_owner;             // get RQ1 from core and send RQ2 to core 
+     k_popL0RequestQueue;                      // pop core queue        
+    }
+    transition(Evic_Global_S_M2, NoDataResponse_Ack ){ 
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     ll_clearSharers_ownercore;                // STAG: * -> I         
+     q_updateAckCount;                         // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+     k_popL0RspQueue;                          // pop core queue    
+    }    
+    transition(Evic_Global_S_M2, NoDataResponse_Ack_all , Evic_Global_S_M2_1){ //步骤5
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     ll_clearSharers_ownercore;                // STAG: * -> I   
+     send_InvXtoI_toGcpm_without_data;         // get RSP from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                          // pop core queue          
+    }
+    transition(Evic_Global_S_M2_1, PrbI_R , Evic_Global_M2_1){ //步骤7 local lcpm 收到prbi之后
+     clear_valid_in_ttag;                     // get GRQ2 from GCPM and clear valid in ttag , then do nothing // 清除TTAG中可能的有效位， 
+     l_popL2RequestQueue;                     // pop GCPM queue 
+    }
+    // the left same as I condition 
+
+   //5.12.2 peer LCPM AFTER GET PRBI 需要做的操作 START
+    // peer lcpm is S/EE/MM   
+    transition({S, EE}, PrbI_R1 , PrbI_MM_S){   
+     oo_allocateCacheBlock;                 //    
+     i_allocateTBE;                         //     
+     send_putI_to_core_by_s_owner_grq;      // get GRQ2 from GCPM and send RQ2 to S core   
+     clear_valid_in_ttag;                   // 
+     l_popL2RequestQueue;                   // pop GCPM queue       
+    }
+    transition(PrbI_MM_S, NoDataResponse_Ack  ){    
+     ll_clearSharers_ownercore;             // STAG: * -> I         
+     q_updateAckCount;                      // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+     k_popL0RspQueue;                       // pop core queue     
+    }  
+    transition(PrbI_MM_S, NoDataResponse_Ack_all, I  ){   
+     ll_clearSharers_ownercore;             // STAG: * -> I         
+     send_RspI_to_Gcpm ;                    // get RSP from core and send GRSP to GCPM
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //           
+     k_popL0RspQueue;                       // pop core queue   
+    }  
+
+
+   transition(MM, PrbI_R1 , PrbI_MM_S){   
+     oo_allocateCacheBlock;                 //    
+     i_allocateTBE;                         //     
+     send_putI_to_core_by_s_owner_grq;      // get GRQ2 from GCPM and send RQ2 to S core   
+     clear_valid_in_ttag;                   // 
+     l_popL2RequestQueue;                   // pop GCPM queue       
+    }
+    transition(PrbI_MM_S, NoDataResponse_Ack  ){    
+     // kk_removeRspModifier_rsp;              // STAG: * -> I   
+     ll_clearSharers_ownercore;             // STAG: * -> I         
+     q_updateAckCount;                      // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+     k_popL0RspQueue;                       // pop core queue     
+    }  
+    transition(PrbI_MM_S, NoDataResponse_Ack_all, I  ){   
+     // kk_removeRspModifier_rsp;              // STAG: * -> I   
+     ll_clearSharers_ownercore;             // STAG: * -> I         
+     send_RspIWb_to_Gcpm ;                  // get RSP from core and send GRSP to GCPM
+     ff_deallocateCacheBlock;               //   //是一条操作流程结束时del掉还是TTAG变成I时del掉 // needchange
+     s_deallocateTBE;                       //           
+     k_popL0RspQueue;                       // pop core queue   
+    }  
+
+
+
+    // peer lcpm is M
+    transition(M , PrbI_R2 , PrbI_M){ 
+     oo_allocateCacheBlock;                 //    
+     i_allocateTBE;                         //        
+     send_GetI_to_core_by_m_owner;          // get GRQ2 from GCPM and send RQ2 to core 
+     clear_valid_in_ttag;                   // 
+     l_popL2RequestQueue;                   // pop GCPM request         
+    }
+    transition(PrbI_M, DataResponse_Ack, I ){    
+     // kk_removeRspModifier_rsp;              // STAG: * -> I   
+     // ll_clearSharers_ownercore;             // STAG: * -> I           
+     send_RspIWb_to_Gcpm;                   // get RSP from core and send GRSP to GCPM
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //       
+     k_popL0RspQueue;                       // pop core queue   
+    }  
+    // peer lcpm is I
+    transition(I , PrbI_R3 ){ 
+     oo_allocateCacheBlock;                 //    
+     i_allocateTBE;                         //             
+     send_RspI_to_Gcpm;                     // get GRQ2 from GCPM and send GRSP to GCPM
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //          
+     l_popL2RequestQueue;                   // pop GCPM request   
+    }
+   //5.12.2 peer LCPM AFTER GET PRBI  需要做的操作 END
+
+
+  //5.12.3 START 
+    transition(MM,  EvictGlobalBlk_R3, Evic_Global_M3){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //  
+     ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe    
+     store_the_data_from_ttag;                 // 将数据从Tcache中读出（存于淘汰缓冲中）
+     send_putI_to_core_by_s_owner;             // get RQ1 from local core and send RQ2 to S core  // 脏在Tcache，所以核心不会有M态，核心有副本的一定是S态。   
+     k_popL0RequestQueue;                      // pop core queue               
+    }    
+    transition(Evic_Global_M3,  NoDataResponse_Ack){  
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     ll_clearSharers_ownercore;                // STAG: * -> I         
+     q_updateAckCount;                         // update tbe ackcount // 收集核心发过来的nodataresponse_ack
+     k_popL0RspQueue;                          // pop core queue      
+    }      
+    transition(Evic_Global_M3,  NoDataResponse_Ack_all, Evic_I){  
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     ll_clearSharers_ownercore;                // STAG: * -> I       
+     send_WbMtoI_to_Gcpm_without_data;         // get RSP from S core and send GRQ1 to GCPM    
+     k_popL0RspQueue;                          // pop core queue                   
+    }    
+     // the left same as 5.11.3  
+     // the left same as 5.11.3  
+  //5.12.3 END
+
+  //5.12.4 START
+    transition(M,  EvictGlobalBlk_R4, Evic_Global_M4){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //  
+     ss_recorinmsgL0ID ;                       // save "in_msg.Sender" in tbe        
+     send_GetI_to_core_by_m_owner;             // get RQ1 from local core and send RQ2 to M core  // 
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+    transition(Evic_Global_M4,  DataResponse_Ack, Evic_I){
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     ll_clearSharers_ownercore;                // STAG: * -> I   
+     store_the_data_from_inmsg;                // 
+     send_WbMtoI_to_Gcpm_without_data          // get RSP from M core and send GRQ1 to GCPM        
+     k_popL0RspQueue;                          // pop core queue                            
+    }  
+     // the left same as 5.11.3   
+     // the left same as 5.11.3  
+  // 5.12.4  END
+
+// 5.13 Tcache 读预取
+  // 5.13.1 START
+    transition({MM, M, EE, S},  ECFETCHBLK_R1 ){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //    
+     send_RequestComplete_to_req_core;         // get req from local core and send ack to local core 
+     ff_deallocateCacheBlock;                  //   
+     s_deallocateTBE;                          //        
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+  // 5.13.1 end  
+
+  // 5.13.2 START
+    transition(I,  ECFETCHBLK_R2,  ECFETCHBLK_M1){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //    
+     ss_recorinmsgL0ID;                        // save "in_msg.Sender" in tbe    
+     send_RdDataS_to_gcpm;                     // get req from local core and send 
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+    transition(ECFETCHBLK_M1,  RSPI_LOCAL ){  // local lcpm after get prbs do nothing and pop GRQ2 queue
+     l_popL2RequestQueue;                     // pop GRQ2 queue        
+    }   
+    transition(ECFETCHBLK_M1,  ACKSDATA , S){  
+     write_data_in_tcache_gcpm;             // 将数据写入Tcache   
+     send_RequestComplete_to_local_core;    // get gack from gcpm and send ack to local core // 向local核心返回requestcomplete响应  
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //   
+     o_popL2ResponseQueue;                  // pop GAK queue
+    }   
+    transition(ECFETCHBLK_M1,  ACKEDATA , EE){  
+     write_data_in_tcache_gcpm;             // 将数据写入Tcache   
+     send_RequestComplete_to_local_core;    // get gack from gcpm and send ack to local core // 向local核心返回requestcomplete响应  
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //   
+     o_popL2ResponseQueue;                  // pop GAK queue                       
+    }   
+  // 5.13.2 end  
+
+// 5.14 Tcache 写预取
+  // 5.14.1 START
+    transition({MM, M, EE},  ECFETCHBLKMOD_R1 ){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //    
+     send_RequestComplete_to_req_core;         // get req from local core and send ack to local core 
+     ff_deallocateCacheBlock;                  //   
+     s_deallocateTBE;                          //        
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+  // 5.14.1 end  
+
+  // 5.14.2 START
+    transition(S,  ECFETCHBLKMOD_R2,  ECFETCHBLKMOD_M1){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //    
+     ss_recorinmsgL0ID;                        // save "in_msg.Sender" in tbe    
+     send_InvXtoI_toGcpm_without_data;         // get req from local core and send GRQ1 to gcpm
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+    transition(ECFETCHBLKMOD_M1,  PrbI_R ){   // local lcpm after get prbi do nothing and pop GRQ2 queue
+     l_popL2RequestQueue;                     // pop GRQ2 queue        
+    }   
+    transition(ECFETCHBLKMOD_M1,  {AckCpl_R,ACKEDATA } , EE){  
+     send_RequestComplete_to_local_core;    // get gack from gcpm and send ack to local core // 向local核心返回requestcomplete响应  
+     ff_deallocateCacheBlock;               //   
+     s_deallocateTBE;                       //   
+     o_popL2ResponseQueue;                  // pop GAK queue
+    }   
+  // 5.14.2 end  
+
+  // 5.14.3 START
+    transition(S,  ECFETCHBLKMOD_R3,  ECFETCHBLKMOD_M2){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //    
+     ss_recorinmsgL0ID;                        // save "in_msg.Sender" in tbe    
+     send_RdDataM_to_Gcpm;                     // get req from local core and send GRQ1 to gcpm  
+     k_popL0RequestQueue;                      // pop core queue            
+    }   
+    transition(ECFETCHBLKMOD_M2,  PrbI_R ){    // local lcpm after get prbi do nothing and pop GRQ2 queue
+     l_popL2RequestQueue;                      // pop GRQ2 queue        
+    }   
+    transition(ECFETCHBLKMOD_M2,  ACKEDATA , EE){  
+     write_data_in_tcache_gcpm;                           // 将数据写入Tcache       
+     clear_valid_in_ttag;                                 // 将owner位保持为全0
+     send_RequestComplete_to_local_core_withoutdata;      // get gack from gcpm and send ack to local core // 向local核心返回不带数据的requestcomplete响应  
+     ff_deallocateCacheBlock;                             //   
+     s_deallocateTBE;                                     //   
+     o_popL2ResponseQueue;                                // pop GAK queue
+    } 
+  // 5.14.3 end  
+
+// 5.15 Tcache淘汰
+
+  //5.15.1 START
+    transition(M,  ELIMINATED_R1, ELIMINATED_M1){ 
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //  
+     send_GetI_to_core_by_m_owner;             // get RQ1 from local core and send RQ2 to M core
+     k_popL0RequestQueue;                      // pop core queue          
+    }  
+    transition(ELIMINATED_M1, DataResponse_Ack, ELIMINATED_M1_1){
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     store_the_data_from_inmsg;                // 
+     send_WbMtoI_to_Gcpm_without_data          // get RSP from core and send GRQ1 to GCPM 
+     k_popL0RspQueue;                          // pop core queue      
+    }  
+    transition(ELIMINATED_M1_1,  PrbI_R, ELIMINATED_M1_2){
+     send_RspI_or_RspIwb_to_Gcpm_by_flag;      // get GRQ2 from GCPM and send GRSP to GCPM 
+     l_popL2RequestQueue;                      // 排空来自GCPM的请求队列         
+    }   
+    transition(ELIMINATED_M1_2,  AckCpl_R, I){
+     ff_deallocateCacheBlock;                  //                                   
+     s_deallocateTBE;                          // get GACK from GCPM and release TBE  
+     o_popL2ResponseQueue;                     // 排空来自GCPM的RSP队列              
+    } 
+  //5.15.1 END
+
+
+  //5.15.2 START 
+    transition(MM,  ELIMINATED_R2, ELIMINATED_M2){
+     oo_allocateCacheBlock;                    //    
+     i_allocateTBE;                            //  
+     store_the_data_from_ttag;                 // 将TCACHE中的数据存于淘汰缓存中   
+     send_putI_to_core_by_s_owner;             // get RQ1 from core and send RQ2 to core 
+     k_popL0RequestQueue;                      // pop core queue   
+    }    
+    transition(ELIMINATED_M2,  NoDataResponse_Ack ){
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     q_updateAckCount;                         // 
+     k_popL0RspQueue;                          // pop core queue         
+    }      
+    transition(ELIMINATED_M2,  NoDataResponse_Ack_all, ELIMINATED_M2_1){
+     // kk_removeRspModifier_rsp;                 // STAG: * -> I   
+     send_WbMtoI_to_Gcpm_without_data;         // get RSP from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                          // pop core queue         
+    }  
+    transition(ELIMINATED_M2_1,  PrbI_R, ELIMINATED_M2_2){  
+     send_RspI_or_RspIwb_to_Gcpm_by_flag;      // get GRQ2 from GCPM and send GRSP to GCPM 
+     l_popL2RequestQueue;                      // 排空来自GCPM的请求队列             
+    }  
+    transition(ELIMINATED_M2_2,  AckCpl_R, I){
+     ff_deallocateCacheBlock;                  //    
+     s_deallocateTBE;                          // get GACK from GCPM and release TBE  
+     o_popL2ResponseQueue;                     // 排空来自GCPM的RSP队列           
+    }  
+  //5.15.2  END
+
+// add by gubiao transition END
+// add by gubiao transition END
+// add by gubiao transition END 
+
+ 
+// 5.7  不可cache读
+   //5.7.1 start
+    transition(M , ReadNCData_R, MM_M){
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe        
+     a_issueGETS;                      // get rq1 from local core and send rq2 to M core
+     uu_profileHit;                    // 
+     k_popL0RequestQueue;              // 
+    }
+    transition(MM_M , NoDataResponse_Ack, MM){
+     u_writeDataFromL0Response;        // 获取数据并放入LCPM缓冲
+     // ll_clearModifier_ownercore_rsp;   // STAG(C3) M->S
+     nn_addSharer_rsp;                 // STAG(C3) M->S
+     send_readdata_to_local_core;      // get rsp from M core and send ack to local core
+     ff_deallocateCacheBlock;          //    
+     s_deallocateTBE;                  //    
+     k_popL0RspQueue;                  // 
+    }
+   //5.7.1 end
+
+   //5.7.2 START 
+    transition({MM, S, EE} , ReadNCData_R){
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //        
+     send_readdata_to_core;            // get req from local core and send ack to lcoal core
+     ff_deallocateCacheBlock;          //    
+     s_deallocateTBE;                  //        
+     k_popL0RequestQueue;              // 
+    }
+   //5.7.2 END
+
+
+   // 5.7.3 START
+    transition(I , ReadNCData_R, ReadNCData_M1) {
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe          
+     ll_clearSharers;                  // Remove all L0 sharers from list     
+     a_issueRdDataNC;                  // get req1 from local core and send GRQ1 to GCPM
+     k_popL0RequestQueue;              // pop core req queue
+    }
+
+    transition(ReadNCData_M1, PROBNCS_R4 ) {  // LOCAL lcpm after get GRQ2 
+     l_popL2RequestQueue;                     // pop GRQ2 queue
+    }
+
+    transition(ReadNCData_M1, AckData ) {  // LOCAL lcpm after get GRQ2 
+     send_readdata_to_local_core;          // get GACK from GCPM and send ack to local core 
+     l_popL2RequestQueue;                  // pop GRQ2 queue
+    }
+   
+    // peer lcpm  after get probncs START
+    transition(I , PROBNCS_R1 ) {     // peer lcpm (I) after get GRQ2 
+     send_RspI_to_Gcpm;               // get GRQ2 and send GRSP to GCPM
+     l_popL2RequestQueue;             // pop GRQ2 queue
+    }
+
+    transition(EE, PROBNCS_R2 , EE) {         // peer lcpm (EE) after get GRQ2 
+     send_RspS_to_Gcpm;                       // get GRQ2 and send GRSP to GCPM
+     l_popL2RequestQueue;                     // pop GRQ2 queue
+    }
+
+    transition(S , PROBNCS_R2 , S) {          // peer lcpm (S) after get GRQ2 
+     send_RspS_to_Gcpm;                       // get GRQ2 and send GRSP to GCPM
+     l_popL2RequestQueue;                     // pop GRQ2 queue
+    }
+
+    transition(MM , PROBNCS_R3 , EE) {        // peer lcpm (MM) after get GRQ2 
+     send_RSPswb_to_Gcpm;                     // get GRQ2 and send GRSP to GCPM
+     l_popL2RequestQueue;                     // pop GRQ2 queue
+    }    
+
+    transition(M , PROBNCS_R3 , PROBNCS_R3_M ) {  // peer lcpm (M) after get GRQ2 
+     oo_allocateCacheBlock;                   //     
+     send_GetS_to_M_core;                     // peer lcpm get GRQ2 from gcpm and send RQ2 to core   // need modify // send to which core ?
+     l_popL2RequestQueue;                     // pop GRQ2 queue
+    }    
+    
+    transition(PROBNCS_R3_M , DataResponse_Ack , EE) {  // peer lcpm (M) after get GRQ2 
+     u_writeDataFromL0Response;                         // 将数据存入tcache    
+     send_RSPswb_to_Gcpm;                               // get GRQ2 and send GRSP to GCPM
+     ff_deallocateCacheBlock;                           //         
+     k_popL0RspQueue;                                   // pop GRQ2 queue
+    }    
+    // peer lcpm  after get probncs END
+   // 5.7.3 END
+
+// 5.8
+  // 5.8.1 START 
+    transition({M,MM} , WriteNCBlk_R1, WriteNCBlk_M1) {  
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe         
+     send_getr_to_core;                // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_m_owner;     // send rq2 to m core 
+     k_popL0RequestQueue;              // pop req queue
+    }
+
+    transition(EE , WriteNCBlk_R1, WriteNCBlk_M1) {  
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe         
+     send_getr_to_core;                // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_s_owner;     // send rq2 to s core 
+     k_popL0RequestQueue;              // pop req queue
+    }
+
+    transition(WriteNCBlk_M1, DataResponse_Ack) { 
+     u_writeDataFromL0Response;       // 将数据存入tcache
+     k_popL0RspQueue;                 // pop core rsp queue
+    }
+
+    transition(WriteNCBlk_M1, NoDataResponse_Ack) { 
+     send_WbMtoI_to_Gcpm_without_data;   // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+
+    transition(WriteNCBlk_M1, PrbI_R , WriteNCBlk_M1_1) {  // local get prbi
+     send_RspI_or_RspIwb_to_Gcpm_by_flag;    // get GRQ2 from GCPM and send GRSP to GCPM
+     l_popL2RequestQueue;                    // pop GCPM GRQ2 queue
+    }
+
+    transition(WriteNCBlk_M1_1, AckCpl_R , I) {  
+     send_writecomplete_to_local_core;       // get GACK from GCPM and send ACK to local core 
+     ff_deallocateCacheBlock;                //    
+     s_deallocateTBE;                        //          
+     o_popL2ResponseQueue;                   // pop GCPM GACK queue
+    }   
+  // 5.8.1 END
+
+  // 5.8.2 START 
+    transition(S, WriteNCBlk_R, WriteNCBlk_M2) {
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe     
+     send_getr_to_core;                // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_s_owner;     // send rq2 to s core 
+     k_popL0RequestQueue;              // pop req queue
+    }
+    transition(WriteNCBlk_M2, DataResponse) { 
+     u_writeDataFromL0Response;       // 将数据存入tcache
+     k_popL0RspQueue;                 // pop core rsp queue
+    }
+    transition(WriteNCBlk_M2, NoDataResponse_Ack, WriteNCBlk_M2_1) { 
+     send_WrDataNC_to_GCPM;              // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+    transition(I, WriteNCBlk_R, WriteNCBlk_M2_1) {
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe     
+     send_WrDataNC_to_GCPM;            // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RequestQueue;              // pop req queue
+    }
+    transition(WriteNCBlk_M2_1, PrbI_R , WriteNCBlk_M2_2) {  // local LCPM get PRBI
+     send_RspIWb_to_Gcpm;              // get GRQ2 from GCPM and send GRSP to GCPM 
+     l_popL2RequestQueue;              // pop gcpm GRQ2 queue 
+    }
+    transition(WriteNCBlk_M2_2, AckCpl_R , I) {  
+     send_writecomplete_to_local_core;       // get GACK from GCPM and send ACK to local core 
+     ff_deallocateCacheBlock;                //    
+     s_deallocateTBE;                        //          
+     o_popL2ResponseQueue;                   // pop GCPM GACK queue
+    }   
+  // 5.8.2 END
+
+  // 5.8.3 START 
+    transition({MM,EE} , WriteNCBlk_R2, WriteNCBlk_M3) {  
+     oo_allocateCacheBlock;              //    
+     i_allocateTBE;                      //  
+     ss_recorinmsgL0ID;                  // save "in_msg.Sender" in tbe          
+     send_getr_to_core;                  // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_s_owner;       // send rq2 to s core 
+     k_popL0RequestQueue;                // pop req queue
+    }
+    transition(WriteNCBlk_M3, DataResponse) { 
+     u_writeDataFromL0Response;          // 将数据存入tcache
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+    transition(WriteNCBlk_M3, NoDataResponse_Ack, WriteNCBlk_M3_1) { 
+     send_WbMtoI_to_Gcpm_without_data;   // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+    transition(WriteNCBlk_M3_1, PrbI_R ,WriteNCBlk_M3_2) {  // local LCPM get PRBI
+     send_RspI_or_RspIwb_to_Gcpm_by_flag; // get GRQ2 from GCPM and send GRSP to GCPM 
+     l_popL2RequestQueue;                 // pop gcpm GRQ2 queue 
+    }
+    transition(WriteNCBlk_M3_2, AckCpl_R , I) {  
+     send_writecomplete_to_local_core;       // get GACK from GCPM and send ACK to local core 
+     ff_deallocateCacheBlock;                //    
+     s_deallocateTBE;                        //          
+     o_popL2ResponseQueue;                   // pop GCPM GACK queue
+    }   
+  // 5.8.3 END
+
+  // 5.8.4 START 
+    transition(M, WriteNCBlk_R2, WriteNCBlk_M4) {  
+     oo_allocateCacheBlock;              //    
+     i_allocateTBE;                      //  
+     ss_recorinmsgL0ID;                  // save "in_msg.Sender" in tbe          
+     send_getr_to_core;                  // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_m_owner;       // send rq2 to m core 
+     k_popL0RequestQueue;                // pop req queue
+    }
+    transition(WriteNCBlk_M4, DataResponse) {    // dataresponse的计数问题 // need dvid
+     u_writeDataFromL0Response;          // 将数据存入tcache
+     send_WbMtoI_to_Gcpm_without_data;   // get rsp from core and send GRQ1 to gcpm
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+    transition(WriteNCBlk_M4, PrbI_R ,WriteNCBlk_M4_1) {  // local LCPM get PRBI
+     send_RspI_or_RspIwb_to_Gcpm_by_flag; // get GRQ2 from GCPM and send GRSP to GCPM 
+     l_popL2RequestQueue;                 // pop gcpm GRQ2 queue 
+    }
+    transition(WriteNCBlk_M4_1, AckCpl_R , I) {  
+     send_writecomplete_to_local_core;       // get GACK from GCPM and send ACK to local core 
+     ff_deallocateCacheBlock;                //    
+     s_deallocateTBE;                        //          
+     o_popL2ResponseQueue;                   // pop GCPM GACK queue
+    }   
+  // 5.8.4 END
+
+
+ // 5.8.5 START 
+    transition(S, WriteNCBlk_R2, WriteNCBlk_M5) {
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe     
+     send_getr_to_core;                // get rq1 from local core and send rq2 to local core 
+     send_putI_to_core_by_s_owner;     // send rq2 to s core 
+     k_popL0RequestQueue;              // pop req queue
+    }
+    transition(WriteNCBlk_M5, DataResponse) { 
+     u_writeDataFromL0Response;       // 将数据存入tcache
+     k_popL0RspQueue;                 // pop core rsp queue
+    }
+    transition(WriteNCBlk_M5, NoDataResponse_Ack, WriteNCBlk_M5_1) { 
+     send_WrDataNC_to_GCPM;              // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RspQueue;                    // pop core rsp queue
+    }
+    transition(I, WriteNCBlk_R, WriteNCBlk_M5_1) {
+     oo_allocateCacheBlock;            //    
+     i_allocateTBE;                    //  
+     ss_recorinmsgL0ID;                // save "in_msg.Sender" in tbe     
+     send_WrDataNC_to_GCPM;            // get rq1 from core and send GRQ1 to GCPM
+     k_popL0RequestQueue;              // pop req queue
+    }
+    transition(WriteNCBlk_M5_1, PrbI_R , WriteNCBlk_M5_2) {  // local LCPM get PRBI
+     send_RspIWb_to_Gcpm;              // get GRQ2 from GCPM and send GRSP to GCPM  // need dvid // 数据需要带有粒度和掩码，
+     l_popL2RequestQueue;              // pop gcpm GRQ2 queue 
+    }
+    transition(WriteNCBlk_M5_2, AckCpl_R , I) {  
+     send_writecomplete_to_local_core;       // get GACK from GCPM and send ACK to local core 
+     ff_deallocateCacheBlock;                //    
+     s_deallocateTBE;                        //          
+     o_popL2ResponseQueue;                   // pop GCPM GACK queue
+    }   
+  // 5.8.5 END
 
-  // If a transaction has aborted, the L0 could re-request
-  // data which is in M or MM state in L1. Instruct will not present in M mode
-  transition(MM, Load, MM) {
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    h_data_to_l0;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(MM, Ifetch, MM) {
-    nn_addSharer;
-    //ss_recordGetSL0ID;
-    h_instruction_to_l0;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(M, Load, MM_DL0) { //wait for DataResponse
-    //issue gets to M core
-    a_issueGETI;
-    //nn_addSharer;
-    ss_recordGetXL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(M, Ifetch, MM_IL0) { //wait for DataResponse
-    //todo:issue gets to M core
-    a_issueGETI;
-    //nn_addSharer;
-    ss_recordGetXL0ID;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  transition(MM_IL0, DataResponse, MM) {
-    //getdata and put into l3-cache
-    u_writeDataFromL0Response;
-    //put cache_entry.Modefier,  cache_entry.Modefier := MachineID, 
-    nn_putModifier;
-    //and gets destnation core to shaders( dest core recv gets and turn into s)
-    //nn_addSharer;
-    //send data back to the requestor cpu scache
-    hh_inxdata_to_l0;
-    //Pop incoming queue
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
 
-  transition(MM_DL0, DataResponse, MM) {
-    //getdata and put into l3-cache
-    u_writeDataFromL0Response;
-    //put cache_entry.Modefier,  cache_entry.Modefier := MachineID, 
-    nn_putModifier;
-    //and gets destnation core to shaders( dest core recv gets and turn into s)
-    //nn_addSharer;
-    //send data back to the requestor cpu scache
-    hh_xdata_to_l0;
-    //Pop incoming queue
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  // If a transaction has aborted, the L0 could re-request
-  // data which is in M state in L1.
-  transition({E,M}, Store, M) {
-    hh_xdata_to_l0;
-    uu_profileHit;
-    k_popL0RequestQueue;
-  }
-
-  // A transaction may have tried to modify a cache block in M state with
-  // non-speculative (pre-transactional) data. This needs to be copied
-  // to the L1 before any further modifications occur at the L0.
-  transition({M,E}, L0_DataCopy, M) {
-    u_writeDataFromL0Request;
-    k_popL0RequestQueue;
-  }
 
-  transition({M_IL0, E_IL0}, L0_DataCopy, M_IL0) {
-    u_writeDataFromL0Request;
-    k_popL0RequestQueue;
-  }
-
-  // A NAK from the L0 means that the L0 invalidated its
-  // modified line (due to an abort) so it is therefore necessary
-  // to use the L1's correct version instead
-  transition({M_IL0, E_IL0}, L0_DataNak, MM) {
-    k_popL0RequestQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(I, L1_Replacement) {
-    ff_deallocateCacheBlock;
-  }
 }
